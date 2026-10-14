@@ -103,17 +103,16 @@ if menu == "📝 Trading Goods Registration":
       inspection_req = st.selectbox("8. Inspection Req.", ["Yes", "No"])
       ir_req = st.selectbox("9. IR Req.", ["Yes", "No"])
 
-      # 2. จัดการ Shipment date แบบมีเงื่อนไข To be decided
-      is_tbd = st.checkbox("10. Shipment date: To be decided (ยังไม่ระบุวัน)")
+      # 10. Shipment date พร้อม checkbox 'To be decided' ไว้ด้านล่าง
+      date_val = st.date_input("10. Shipment date", value=date.today())
+      is_tbd = st.checkbox("To be decided")
+
       if is_tbd:
         shipment_date = "To be decided"
-        st.date_input(
-            "10. Shipment date", value=date.today(), disabled=True
-        )  # แสดงผลเทาๆ ไว้กันงง
       else:
-        shipment_date = str(st.date_input("10. Shipment date", value=date.today()))
+        shipment_date = str(date_val)
 
-      # 3. Type เป็น Dropdown ตามตัวเลือกใหม่
+      # 11. Type Dropdown
       prod_type = st.selectbox(
           "11. Type",
           [
@@ -124,7 +123,7 @@ if menu == "📝 Trading Goods Registration":
           ],
       )
 
-      # 4. Status เป็น Dropdown ตามตัวเลือกใหม่
+      # 12. Status Dropdown
       status = st.selectbox(
           "12. Status",
           [
@@ -186,4 +185,67 @@ elif menu == "📊 Overall Stock Dashboard":
     else:
       df["Clean_Qty"] = 0.0
 
-    # เงื่อนไขกรอง On-hand stock: Status ไม่ใช่ 'Delivered'
+    # เงื่อนไขกรอง On-hand stock: Status ไม่ใช่ 'Delivered' และ Type ไม่ใช่ 'Inspection & Packing Service'
+    filtered_df = df.copy()
+
+    if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
+      filtered_df = filtered_df[
+          (
+              filtered_df["Status"]
+              .astype(str)
+              .str.strip()
+              .str.lower()
+              .ne("delivered")
+          )
+          & (
+              filtered_df["Type"]
+              .astype(str)
+              .str.strip()
+              .str.lower()
+              .ne("inspection & packing service")
+          )
+      ]
+
+    # คำนวณยอดแยกตามเกรด (Big, Small, Mix)
+    if "Grade" in filtered_df.columns:
+      stock_big = filtered_df[
+          filtered_df["Grade"].astype(str).str.strip().str.lower() == "big"
+      ]["Clean_Qty"].sum()
+      stock_small = filtered_df[
+          filtered_df["Grade"].astype(str).str.strip().str.lower() == "small"
+      ]["Clean_Qty"].sum()
+      stock_mix = filtered_df[
+          filtered_df["Grade"].astype(str).str.strip().str.lower() == "mix"
+      ]["Clean_Qty"].sum()
+      total_on_hand = filtered_df["Clean_Qty"].sum()
+    else:
+      stock_big, stock_small, stock_mix, total_on_hand = 0, 0, 0, 0
+
+    # --- แสดงผล Cardboard (Metrics) สรุป On-hand stock ---
+    st.subheader("📦 On-hand Stock Summary (แยกตามเกรด)")
+    st.markdown(
+        "*เงื่อนไขการคำนวณ: ไม่รวมรายการที่มี Status เป็น 'Delivered' และ Type"
+        " เป็น 'Inspection & Packing Service'"
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+      st.metric(label="🟢 Grade: Big", value=f"{stock_big:,.2f}")
+    with col2:
+      st.metric(label="🔵 Grade: Small", value=f"{stock_small:,.2f}")
+    with col3:
+      st.metric(label="🟠 Grade: Mix", value=f"{stock_mix:,.2f}")
+    with col4:
+      st.metric(label="✨ Total On-Hand Stock", value=f"{total_on_hand:,.2f}")
+
+    st.divider()
+
+    # แสดงตารางข้อมูล On-hand Stock ที่ผ่านการกรองแล้ว
+    st.subheader("📑 รายละเอียดรายการสินค้าในคลัง (Active Stock)")
+    st.dataframe(filtered_df, use_container_width=True)
+
+    with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
+      st.dataframe(df, use_container_width=True)
+
+  else:
+    st.warning("ยังไม่มีข้อมูลใน Google Sheets สำหรับประมวลผลสต็อก")
