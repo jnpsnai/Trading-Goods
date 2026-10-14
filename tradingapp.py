@@ -464,14 +464,14 @@ elif menu == "✏️ Edit Registration":
 
 
 # ==========================================
-# หน้าที่ 3: Packing Module (ย้ายชื่อผลิตภัณฑ์ขึ้นมาไว้ด้านบน)
+# หน้าที่ 3: Packing Module (แก้ไขจุดค้นหาแถว WIP เพื่อตัดสต็อกให้แม่นยำ)
 # ==========================================
 elif menu == "📦 Packing Module":
   st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
   st.markdown(
       "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก ระบุชื่อผลิตภัณฑ์ (Export Name)"
       " วันที่แพ็ก และบันทึกผลผลิต FG แยกเกรดลงใน Sheet เฉพาะ"
-      " (`Packing_Records`) อัตโนมัติ"
+      " (`Packing_Records`) พร้อมตัดสต็อก WIP ต้นทางอัตโนมัติ"
   )
 
   data = sheet.get_all_records()
@@ -614,16 +614,21 @@ elif menu == "📦 Packing Module":
             else:
               new_status = "Pending Packing"
 
-            # 1. อัปเดตยอด WIP ต้นทางใน Sheet หลัก
-            matched_idx = (
-                int(
-                    df[
-                        df["THAI STICK Lot. No."].astype(str)
-                        == selected_wip_lot
-                    ].index[0]
-                )
-                + 2
-            )
+            # 1. ค้นหาแถว WIP ต้นทางใน Google Sheets แบบแม่นยำด้วย gspread find()
+            cell_wip = sheet.find(str(selected_wip_lot))
+            if cell_wip:
+              matched_idx = cell_wip.row
+            else:
+              # Fallback คำนวณจาก Pandas index ถ้าหาไม่เจอ
+              matched_idx = (
+                  int(
+                      df[
+                          df["THAI STICK Lot. No."].astype(str)
+                          == selected_wip_lot
+                      ].index[0]
+                  )
+                  + 2
+              )
 
             latest_headers = sheet.row_values(1)
             row_values = sheet.row_values(matched_idx)
