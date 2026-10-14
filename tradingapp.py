@@ -606,5 +606,5 @@ elif menu == "📊 Overall Stock Dashboard":
   data = sheet.get_all_records()
 
   if data:
-    df = pd.DataFrame(data)
-    df.columns =
+      df = pd.DataFrame(data)
+      df.columns = [str(c).strip() for c in df.columns]
