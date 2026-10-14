@@ -612,7 +612,7 @@ elif menu == "📈 Monthly Report":
 
 
 # ==========================================
-# หน้าที่ 4: Trading Goods Registration (ปรับตำแหน่ง To be decided ไว้ด้านล่างข้อ 10-13)
+# หน้าที่ 4: Trading Goods Registration (ปรับข้อ 10, 11, 12, 13 ให้มี To be decided ใต้หัวข้อ)
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
@@ -645,48 +645,52 @@ elif menu == "📝 Trading Goods Registration":
           "Remark Qty (เช่น 5x1000)", placeholder="ระบุรายละเอียดจำนวนถุง/แพ็ก"
       )
 
-      # 10. Inspection Req. พร้อม To be decided ไว้ด้านล่าง
-      inspection_req_opt = ["Yes", "No", "To be decided"]
-      inspection_req_choice = st.selectbox(
-          "10. Inspection Req.", inspection_req_opt, key="reg_insp_choice"
+      # 10. Inspection Req. (มี To be decided เป็นตัวเลือกใน Dropdown)
+      inspection_req = st.selectbox(
+          "10. Inspection Req.", ["No", "Yes", "To be decided"], key="reg_insp"
       )
-      inspection_req = inspection_req_choice
 
-      # 11. IR Req. พร้อม To be decided ไว้ด้านล่าง
-      ir_req_opt = ["Yes", "No", "To be decided"]
-      ir_req_choice = st.selectbox(
-          "11. IR Req.", ir_req_opt, key="reg_ir_choice"
+      # 11. IR Req. (มี To be decided เป็นตัวเลือกใน Dropdown)
+      ir_req = st.selectbox(
+          "11. IR Req.", ["No", "Yes", "To be decided"], key="reg_ir"
       )
-      ir_req = ir_req_choice
 
-      # 12. Shipment date พร้อม To be decided ไว้ด้านล่าง
+      # 12. Shipment date (จัดวาง To be decided อยู่ใต้หัวข้อคู่กับช่องวันที่)
+      st.markdown("12. Shipment date")
       is_tbd_ship = st.checkbox(
-          "To be decided (Shipment date)", key="reg_tbd_ship"
+          "To be decided", key="reg_tbd_ship", value=False
       )
       if is_tbd_ship:
         shipment_date = "To be decided"
         st.date_input(
-            "12. Shipment date",
+            "เลือกวันที่จัดส่ง",
             value=date.today(),
             key="reg_ship_dt_disabled",
             disabled=True,
+            label_visibility="collapsed",
         )
       else:
         shipment_date = str(
             st.date_input(
-                "12. Shipment date", value=date.today(), key="reg_ship_dt"
+                "เลือกวันที่จัดส่ง",
+                value=date.today(),
+                key="reg_ship_dt",
+                label_visibility="collapsed",
             )
         )
 
-      # 13. Type พร้อม To be decided ไว้ด้านล่าง
-      prod_type_opt = [
-          "Inspection & Packing Service",
-          "Trading Goods (TS)",
-          "Consignment",
-          "In House Product",
-          "To be decided",
-      ]
-      prod_type = st.selectbox("13. Type", prod_type_opt, key="reg_type_choice")
+      # 13. Type (มี To be decided เป็นตัวเลือกใน Dropdown)
+      prod_type = st.selectbox(
+          "13. Type",
+          [
+              "Inspection & Packing Service",
+              "Trading Goods (TS)",
+              "Consignment",
+              "In House Product",
+              "To be decided",
+          ],
+          key="reg_type",
+      )
 
       status = st.selectbox(
           "14. Status",
@@ -873,7 +877,7 @@ elif menu == "✏️ Edit Registration":
                 key="edit_remark_qty",
             )
 
-            insp_opt = ["Yes", "No", "To be decided"]
+            insp_opt = ["No", "Yes", "To be decided"]
             old_insp = str(current_data.get("Inspection Req.", "No"))
             e_insp = st.selectbox(
                 "10. Inspection Req.",
@@ -881,7 +885,7 @@ elif menu == "✏️ Edit Registration":
                 index=insp_opt.index(old_insp) if old_insp in insp_opt else 0,
             )
 
-            ir_opt = ["Yes", "No", "To be decided"]
+            ir_opt = ["No", "Yes", "To be decided"]
             old_ir = str(current_data.get("IR Req.", "No"))
             e_ir = st.selectbox(
                 "11. IR Req.",
@@ -900,15 +904,28 @@ elif menu == "✏️ Edit Registration":
               except:
                 default_dt = date.today()
 
+            st.markdown("12. Shipment date")
             e_is_tbd = st.checkbox(
-                "To be decided (Shipment date)",
-                value=is_tbd_default,
-                key="edit_tbd",
+                "To be decided", value=is_tbd_default, key="edit_tbd"
             )
-            e_date_input = st.date_input(
-                "12. Shipment date", value=default_dt, key="edit_date"
-            )
-            e_shipment_date = "To be decided" if e_is_tbd else str(e_date_input)
+            if e_is_tbd:
+              e_shipment_date = "To be decided"
+              st.date_input(
+                  "เลือกวันที่จัดส่ง",
+                  value=default_dt,
+                  key="edit_date_disabled",
+                  disabled=True,
+                  label_visibility="collapsed",
+              )
+            else:
+              e_shipment_date = str(
+                  st.date_input(
+                      "เลือกวันที่จัดส่ง",
+                      value=default_dt,
+                      key="edit_date",
+                      label_visibility="collapsed",
+                  )
+              )
 
             types_opt = [
                 "Inspection & Packing Service",
