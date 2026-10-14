@@ -59,7 +59,7 @@ SHEET_NAME = "Trading Data Log"
 sh = client.open(SHEET_NAME)
 sheet = sh.get_worksheet(0)  # แผ่นหลักสำหรับ Registration (Trading Goods)
 
-# กำหนดโครงสร้าง Column Header สำหรับแผ่นหลัก (Registration)
+# กำหนดโครงสร้าง Column Header (Receive date อยู่ Column H และ Packing date อยู่ Column O)
 EXPECTED_HEADERS = [
     "Cultivar Name",
     "Supplier Name",
@@ -68,6 +68,7 @@ EXPECTED_HEADERS = [
     "THAI STICK Lot. No.",
     "Category",
     "Grade",
+    "Receive date",
     "Quantity",
     "Inspection Req.",
     "IR Req.",
@@ -77,10 +78,10 @@ EXPECTED_HEADERS = [
     "Packing date",
 ]
 
-# ตรวจสอบและซิงค์ Header แผ่นหลัก
+# ตรวจสอบและซิงค์ Header แผ่นหลัก (A ถึง O = 15 คอลัมน์)
 current_headers = sheet.row_values(1)
 if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
-  sheet.update("A1:N1", [EXPECTED_HEADERS])
+  sheet.update("A1:O1", [EXPECTED_HEADERS])
 
 # ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Records
 try:
@@ -144,7 +145,7 @@ def clean_quantity(val):
 
 
 # ==========================================
-# หน้าที่ 1: Trading Goods Registration
+# หน้าที่ 1: Trading Goods Registration (เพิ่ม Receive date ที่ Column H)
 # ==========================================
 if menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
@@ -166,11 +167,16 @@ if menu == "📝 Trading Goods Registration":
       grade = st.selectbox("7. Grade", grades_opt)
 
     with col2:
-      quantity = st.number_input("8. Quantity", min_value=0.0, step=0.1)
-      inspection_req = st.selectbox("9. Inspection Req.", ["Yes", "No"])
-      ir_req = st.selectbox("10. IR Req.", ["Yes", "No"])
+      receive_date_val = st.date_input(
+          "8. Receive date (Column H)", value=date.today(), key="reg_receive_date"
+      )
+      receive_date_str = str(receive_date_val)
 
-      date_val = st.date_input("11. Shipment date", value=date.today())
+      quantity = st.number_input("9. Quantity", min_value=0.0, step=0.1)
+      inspection_req = st.selectbox("10. Inspection Req.", ["Yes", "No"])
+      ir_req = st.selectbox("11. IR Req.", ["Yes", "No"])
+
+      date_val = st.date_input("12. Shipment date", value=date.today())
       is_tbd = st.checkbox("To be decided")
       shipment_date = "To be decided" if is_tbd else str(date_val)
 
@@ -180,7 +186,7 @@ if menu == "📝 Trading Goods Registration":
           "Consignment",
           "In House Product",
       ]
-      prod_type = st.selectbox("12. Type", types_opt)
+      prod_type = st.selectbox("13. Type", types_opt)
 
       status_opt = [
           "Trading Goods Received to Stock",
@@ -190,10 +196,10 @@ if menu == "📝 Trading Goods Registration":
           "Delivered",
           "Waiting for Return",
       ]
-      status = st.selectbox("13. Status", status_opt)
+      status = st.selectbox("14. Status", status_opt)
 
       pack_date_val = st.date_input(
-          "14. Packing date (Column O)", value=date.today(), key="reg_pack_date"
+          "15. Packing date (Column O)", value=date.today(), key="reg_pack_date"
       )
       packing_date_str = str(pack_date_val)
 
@@ -210,6 +216,7 @@ if menu == "📝 Trading Goods Registration":
           "THAI STICK Lot. No.": thai_stick_lot,
           "Category": category,
           "Grade": grade,
+          "Receive date": receive_date_str,
           "Quantity": str(quantity),
           "Inspection Req.": inspection_req,
           "IR Req.": ir_req,
@@ -339,18 +346,32 @@ elif menu == "✏️ Edit Registration":
             )
 
           with col2:
+            old_rec_date = str(current_data.get("Receive date", ""))
+            try:
+              default_rec_dt = datetime.strptime(
+                  old_rec_date, "%Y-%m-%d"
+              ).date()
+            except:
+              default_rec_dt = date.today()
+            e_rec_date_input = st.date_input(
+                "8. Receive date (Column H)",
+                value=default_rec_dt,
+                key="edit_receive_date",
+            )
+            e_receive_date_str = str(e_rec_date_input)
+
             try:
               old_qty = float(current_data.get("Quantity", 0.0))
             except:
               old_qty = 0.0
             e_qty = st.number_input(
-                "8. Quantity", min_value=0.0, step=0.1, value=old_qty
+                "9. Quantity", min_value=0.0, step=0.1, value=old_qty
             )
 
             insp_opt = ["Yes", "No"]
             old_insp = str(current_data.get("Inspection Req.", "No"))
             e_insp = st.selectbox(
-                "9. Inspection Req.",
+                "10. Inspection Req.",
                 insp_opt,
                 index=insp_opt.index(old_insp) if old_insp in insp_opt else 0,
             )
@@ -358,7 +379,7 @@ elif menu == "✏️ Edit Registration":
             ir_opt = ["Yes", "No"]
             old_ir = str(current_data.get("IR Req.", "No"))
             e_ir = st.selectbox(
-                "10. IR Req.",
+                "11. IR Req.",
                 ir_opt,
                 index=ir_opt.index(old_ir) if old_ir in ir_opt else 0,
             )
@@ -378,7 +399,7 @@ elif menu == "✏️ Edit Registration":
                 "To be decided", value=is_tbd_default, key="edit_tbd"
             )
             e_date_input = st.date_input(
-                "11. Shipment date", value=default_dt, key="edit_date"
+                "12. Shipment date", value=default_dt, key="edit_date"
             )
             e_shipment_date = "To be decided" if e_is_tbd else str(e_date_input)
 
@@ -390,7 +411,7 @@ elif menu == "✏️ Edit Registration":
             ]
             old_type = str(current_data.get("Type", ""))
             e_type = st.selectbox(
-                "12. Type",
+                "13. Type",
                 types_opt,
                 index=types_opt.index(old_type) if old_type in types_opt else 0,
             )
@@ -405,7 +426,7 @@ elif menu == "✏️ Edit Registration":
             ]
             old_status = str(current_data.get("Status", ""))
             e_status = st.selectbox(
-                "13. Status",
+                "14. Status",
                 status_opt,
                 index=status_opt.index(old_status)
                 if old_status in status_opt
@@ -420,7 +441,7 @@ elif menu == "✏️ Edit Registration":
             except:
               default_pack_dt = date.today()
             e_pack_date_input = st.date_input(
-                "14. Packing date (Column O)",
+                "15. Packing date (Column O)",
                 value=default_pack_dt,
                 key="edit_pack_date",
             )
@@ -441,6 +462,7 @@ elif menu == "✏️ Edit Registration":
                 "THAI STICK Lot. No.": e_thai_lot,
                 "Category": e_category,
                 "Grade": e_grade,
+                "Receive date": e_receive_date_str,
                 "Quantity": str(e_qty),
                 "Inspection Req.": e_insp,
                 "IR Req.": e_ir,
@@ -534,7 +556,7 @@ elif menu == "📦 Packing Module":
                 value=max_wip_qty,
             )
             pack_date_input = st.date_input(
-                "Packing date (วันที่ทำการแพ็ก)", value=date.today()
+                "Packing date (Column O)", value=date.today()
             )
             packing_date_str = str(pack_date_input)
 
@@ -707,7 +729,7 @@ elif menu == "📦 Packing Module":
     if records_data:
       st.dataframe(pd.DataFrame(records_data), use_container_width=True)
     else:
-      st.info("ยังไม่มีข้อมูลในSheet Packing_Records")
+      st.info("ยังไม่มีข้อมูลใน Sheet Packing_Records")
 
     with st.expander("🔍 ดูประวัติ Packing Log ทั้งหมด"):
       log_data = packing_sheet.get_all_records()
@@ -720,7 +742,7 @@ elif menu == "📦 Packing Module":
 
 
 # ==========================================
-# หน้าที่ 4: Overall Stock Dashboard (ดึงข้อมูลผสานระหว่างแผ่นหลักและ Packing_Records)
+# หน้าที่ 4: Overall Stock Dashboard
 # ==========================================
 elif menu == "📊 Overall Stock Dashboard":
   st.title("📊 Overall Stock Dashboard")
@@ -734,15 +756,13 @@ elif menu == "📊 Overall Stock Dashboard":
   if not df_main.empty:
     df_main.columns = [str(c).strip() for c in df_main.columns]
 
-  # 2. ดึงข้อมูลจากแผ่น Packing_Records มาแปลงโครงสร้างให้ตรงกัน แล้วนำมารวมเป็น FG
+  # 2. ดึงข้อมูลจากแผ่น Packing_Records มาแปลงโครงสร้างให้ตรงกัน
   records_data = packing_records_sheet.get_all_records()
   df_packing_fg = pd.DataFrame()
   if records_data:
     df_pack_raw = pd.DataFrame(records_data)
     df_pack_raw.columns = [str(c).strip() for c in df_pack_raw.columns]
 
-    # แปลงคอลัมน์จาก Packing_Records ให้เข้ากับโครงสร้างตารางหลัก
-    # ประกอบด้วย: Cultivar Name, Export Name, THAI STICK Lot. No., Category, Grade, Quantity, Packing date
     converted_rows = []
     for _, row in df_pack_raw.iterrows():
       converted_rows.append({
@@ -753,6 +773,7 @@ elif menu == "📊 Overall Stock Dashboard":
           "THAI STICK Lot. No.": row.get("Generated FG Lot No.", ""),
           "Category": "FG (Finished Goods)",
           "Grade": row.get("Grade", ""),
+          "Receive date": row.get("Packing Date", ""),
           "Quantity": row.get("Quantity", 0),
           "Inspection Req.": "No",
           "IR Req.": "No",
@@ -784,7 +805,6 @@ elif menu == "📊 Overall Stock Dashboard":
         filtered_df["THAI STICK Lot. No."].astype(str).str.strip() != ""
     ]
 
-    # กรองตัด Delivered และ Inspection Service ออกจาก Active Stock
     if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
       filtered_df = filtered_df[
           (
@@ -803,7 +823,6 @@ elif menu == "📊 Overall Stock Dashboard":
           )
       ]
 
-    # แยกประเภท WIP และ FG จาก Category
     if "Category" in filtered_df.columns:
       wip_stock_df = filtered_df[
           filtered_df["Category"]
@@ -823,7 +842,6 @@ elif menu == "📊 Overall Stock Dashboard":
     total_fg = fg_stock_df["Clean_Qty"].sum()
     total_on_hand = total_wip + total_fg
 
-    # --- ส่วนบนสุด: Metric แสดงยอดรวมทั้งหมด และแยกตาม WIP / FG ---
     st.subheader("📌 สรุปยอดรวมสต็อกในคลังทั้งหมด (Total Stock Summary)")
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
@@ -835,7 +853,6 @@ elif menu == "📊 Overall Stock Dashboard":
 
     st.divider()
 
-    # --- ตารางที่ 1: รายละเอียดและสรุปแยกตามเกรดสำหรับ WIP ---
     st.subheader("🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
     if not wip_stock_df.empty:
       wip_big = wip_stock_df[
@@ -870,7 +887,6 @@ elif menu == "📊 Overall Stock Dashboard":
 
     st.divider()
 
-    # --- ตารางที่ 2: รายละเอียดและสรุปแยกตามเกรดสำหรับ FG ---
     st.subheader("📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
     if not fg_stock_df.empty:
       fg_big = fg_stock_df[
