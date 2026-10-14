@@ -759,7 +759,7 @@ elif menu == "📦 Packing Module":
 
 
 # ==========================================
-# หน้าที่ 4: Shipped Out Module (แก้ไขการอ่านค่า Quantity ให้เป็นตัวเลขชัวร์ๆ)
+# หน้าที่ 4: Shipped Out Module (แก้ไขการดึงข้อมูล WIP/FG แยกส่วนถูกต้อง 100%)
 # ==========================================
 elif menu == "🚚 Shipped Out Module":
   st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
@@ -792,9 +792,7 @@ elif menu == "🚚 Shipped Out Module":
           "Category": "FG (Finished Goods)",
           "Grade": row.get("Grade", ""),
           "Receive date": row.get("Packing Date", ""),
-          "Quantity": clean_quantity(
-              row.get("Quantity", 0)
-          ),  # แปลงเป็นตัวเลขทันที
+          "Quantity": clean_quantity(row.get("Quantity", 0)),
           "Inspection Req.": "No",
           "IR Req.": "No",
           "Shipment date": "To be decided",
@@ -804,7 +802,7 @@ elif menu == "🚚 Shipped Out Module":
       })
     df_packing_fg = pd.DataFrame(converted_rows)
 
-  # เตรียมรายการ Lot ที่มีสต็อกคงเหลือ พร้อมแปลง Quantity เป็นตัวเลขชัวร์ๆ
+  # เตรียมรายการ WIP Lot ที่มีสต็อกคงเหลือ
   wip_options = []
   wip_display_map = {}
   wip_dict = {}
@@ -842,6 +840,7 @@ elif menu == "🚚 Shipped Out Module":
             "grade": grade_val,
         }
 
+  # เตรียมรายการ FG Lot ที่มีสต็อกคงเหลือ
   fg_options = []
   fg_display_map = {}
   fg_dict = {}
@@ -1197,4 +1196,62 @@ elif menu == "📊 Overall Stock Dashboard":
       wip_mix = wip_stock_df[
           wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
       ]["Clean_Qty"].sum()
-      wip
+      wip_f = wip_stock_df[
+          wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"
+      ]["Clean_Qty"].sum()
+
+      wc1, wc2, wc3, wc4, wc5 = st.columns(5)
+      with wc1:
+        st.metric(label="WIP: Big", value=f"{wip_big:,.2f}")
+      with wc2:
+        st.metric(label="WIP: Small", value=f"{wip_small:,.2f}")
+      with wc3:
+        st.metric(label="WIP: Mix", value=f"{wip_mix:,.2f}")
+      with wc4:
+        st.metric(label="WIP: F", value=f"{wip_f:,.2f}")
+      with wc5:
+        st.metric(label="WIP Total", value=f"{total_wip:,.2f}")
+
+      st.markdown("")
+      st.dataframe(wip_stock_df, use_container_width=True)
+    else:
+      st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
+
+    st.divider()
+
+    st.subheader("📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
+    if not fg_stock_df.empty:
+      fg_big = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"
+      ]["Clean_Qty"].sum()
+      fg_small = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"
+      ]["Clean_Qty"].sum()
+      fg_mix = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
+      ]["Clean_Qty"].sum()
+      fg_f = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"
+      ]["Clean_Qty"].sum()
+
+      fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+      with fc1:
+        st.metric(label="FG: Big", value=f"{fg_big:,.2f}")
+      with fc2:
+        st.metric(label="FG: Small", value=f"{fg_small:,.2f}")
+      with fc3:
+        st.metric(label="FG: Mix", value=f"{fg_mix:,.2f}")
+      with fc4:
+        st.metric(label="FG: F", value=f"{fg_f:,.2f}")
+      with fc5:
+        st.metric(label="FG Total", value=f"{total_fg:,.2f}")
+
+      st.markdown("")
+      st.dataframe(fg_stock_df, use_container_width=True)
+    else:
+      st.info("ไม่มีรายการสินค้า FG ในคลังขณะนี้")
+
+    with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
+      st.dataframe(df, use_container_width=True)
+  else:
+    st.warning("ยังไม่มีข้อมูลในระบบ Google Sheets สำหรับประมวลผลสต็อก")
