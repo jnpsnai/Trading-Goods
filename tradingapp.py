@@ -233,7 +233,7 @@ if menu == "📝 Trading Goods Registration":
 
 
 # ==========================================
-# หน้าที่ 2: Edit Registration (เพิ่มเงื่อนไข กรอง Qty=0 และ Status=Delivered ออก)
+# หน้าที่ 2: Edit Registration
 # ==========================================
 elif menu == "✏️ Edit Registration":
   st.title("✏️ Edit Registration Data")
@@ -252,14 +252,12 @@ elif menu == "✏️ Edit Registration":
         else df_all.columns[4]
     )
 
-    # แปลง Quantity เป็นตัวเลขเพื่อใช้กรอง
     df_all["Clean_Qty"] = (
         df_all["Quantity"].apply(clean_quantity)
         if "Quantity" in df_all.columns
         else 0.0
     )
 
-    # เงื่อนไขกรอง: Qty > 0 และ Status ต้องไม่ใช่ Delivered (ไม่สนตัวพิมพ์เล็กใหญ่)
     if "Status" in df_all.columns:
       editable_df = df_all[
           (df_all["Clean_Qty"] > 0)
@@ -286,7 +284,6 @@ elif menu == "✏️ Edit Registration":
       )
 
       if selected_lot:
-        # หา Index จริงจากตารางหลักทั้งหมด
         matched_row_idx = (
             int(
                 df_all[df_all[lot_column].astype(str) == selected_lot].index[0]
@@ -467,14 +464,14 @@ elif menu == "✏️ Edit Registration":
 
 
 # ==========================================
-# หน้าที่ 3: Packing Module
+# หน้าที่ 3: Packing Module (ย้ายชื่อผลิตภัณฑ์ขึ้นมาไว้ด้านบน)
 # ==========================================
 elif menu == "📦 Packing Module":
   st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
   st.markdown(
-      "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก บันทึก Packing date และระบบจะบันทึกผลผลิต"
-      " FG แยกเกรดลงใน Sheet เฉพาะ (`Packing_Records`) พร้อม Gen รหัส Lot"
-      " รูปแบบเฉพาะตัว (เช่น `WIP-FG2-Big`) อัตโนมัติ"
+      "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก ระบุชื่อผลิตภัณฑ์ (Export Name)"
+      " วันที่แพ็ก และบันทึกผลผลิต FG แยกเกรดลงใน Sheet เฉพาะ"
+      " (`Packing_Records`) อัตโนมัติ"
   )
 
   data = sheet.get_all_records()
@@ -526,7 +523,7 @@ elif menu == "📦 Packing Module":
         )
 
         with st.form("packing_form"):
-          st.subheader("1. ข้อมูลการเบิกวัตถุดิบและวันที่แพ็ก")
+          st.subheader("1. ข้อมูลการเบิกวัตถุดิบและชื่อผลิตภัณฑ์")
           col_p1, col_p2 = st.columns(2)
           with col_p1:
             withdraw_qty = st.number_input(
@@ -536,11 +533,16 @@ elif menu == "📦 Packing Module":
                 step=0.1,
                 value=max_wip_qty,
             )
-          with col_p2:
             pack_date_input = st.date_input(
                 "Packing date (วันที่ทำการแพ็ก)", value=date.today()
             )
             packing_date_str = str(pack_date_input)
+
+          with col_p2:
+            packed_fg_name = st.text_input(
+                "ชื่อผลิตภัณฑ์หลังแพ็ก (Packed Product / Export Name)",
+                value=cultivar_val,
+            )
 
           st.divider()
           st.subheader(
@@ -586,17 +588,10 @@ elif menu == "📦 Packing Module":
             )
 
           st.divider()
-          st.subheader("3. ของเสีย (Waste) และข้อมูลเพิ่มเติม")
-          col_w1, col_w2 = st.columns(2)
-          with col_w1:
-            waste_qty = st.number_input(
-                "จำนวนของเสีย/สูญเสีย (Waste Qty)", min_value=0.0, step=0.1
-            )
-          with col_w2:
-            packed_fg_name = st.text_input(
-                "ชื่อผลิตภัณฑ์หลังแพ็ก (Packed Product / Export Name)"
-            )
-
+          st.subheader("3. ของเสีย (Waste) และหมายเหตุ")
+          waste_qty = st.number_input(
+              "จำนวนของเสีย/สูญเสีย (Waste Qty)", min_value=0.0, step=0.1
+          )
           note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
 
           pack_submitted = st.form_submit_button(
@@ -666,7 +661,6 @@ elif menu == "📦 Packing Module":
             ])
 
             # 3. บันทึก FG รายละเอียดแต่ละเกรดลงใน Sheet แยก `Packing_Records`
-            # พร้อมตั้งชื่อรหัส Lot เป็นรูปแบบ: {selected_wip_lot}-FG{index}-{Grade}
             fg_items = [
                 (g1_type, g1_qty),
                 (g2_type, g2_qty),
@@ -674,7 +668,6 @@ elif menu == "📦 Packing Module":
                 (g4_type, g4_qty),
             ]
 
-            timestamp_suffix = datetime.now().strftime("%d%H%M")
             created_count = 0
             for idx_fg, (g_type, g_q) in enumerate(fg_items):
               if g_q > 0:
@@ -686,11 +679,11 @@ elif menu == "📦 Packing Module":
                     log_time,
                     selected_wip_lot,
                     cultivar_val,
-                    packed_fg_name if packed_fg_name else cultivar_val,
+                    packed_fg_name,
                     custom_fg_lot,
                     g_type,
                     str(g_q),
-                    str(waste_qty) if idx_fg == 0 else "0",  # บันทึก waste ที่แถวแรก
+                    str(waste_qty) if idx_fg == 0 else "0",
                     packing_date_str,
                     note,
                 ])
