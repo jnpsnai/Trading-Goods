@@ -193,6 +193,16 @@ def clean_quantity(val):
   except:
     return 0.0
 
+def format_df_quantity(df):
+  """ฟังก์ชันช่วยแปลงคอลัมน์ Quantity ให้แสดงผลเป็นคอมมา (มีลูกน้ำ)"""
+  if df is not None and not df.empty:
+    df_copy = df.copy()
+    for col in df_copy.columns:
+      if "qty" in col.lower() or "quantity" in col.lower():
+        df_copy[col] = df_copy[col].apply(lambda x: f"{clean_quantity(x):,.2f}" if pd.notnull(x) and x != "" else x)
+    return df_copy
+  return df
+
 # ==========================================
 # หน้าที่ 1: Delivery Issue
 # ==========================================
@@ -220,20 +230,16 @@ if menu == "🚨 Delivery Issue":
       delivery_df["Shipment date str"] = delivery_df["Shipment date"].astype(str).str.strip()
       delivery_df["Is_TBD"] = delivery_df["Shipment date str"].str.lower() == "to be decided"
 
-      # แยกกลุ่มวันที่ระบุชัดเจน และ กลุ่มที่รอตัดสินใจ (TBD)
       tbd_df = delivery_df[delivery_df["Is_TBD"]].copy()
       dated_df = delivery_df[~delivery_df["Is_TBD"]].copy()
 
-      # จัดเรียงวันที่ (จากใกล้ไปไกล)
       dated_df = dated_df.sort_values(by="Shipment date str", ascending=True)
       unique_dates = dated_df["Shipment date str"].unique()
 
-      # วนลูปสร้างตารางตามวันที่มีกำหนดส่ง (Dated items)
       for d_date in unique_dates:
         sub_df = dated_df[dated_df["Shipment date str"] == d_date]
         sub_display = sub_df.drop(columns=["Is_TBD", "Clean_Qty", "Shipment date str"], errors="ignore")
         
-        # HTML/CSS Banner สำหรับวันที่ระบุชัดเจน (สีเขียว Pastel)
         st.markdown(
             f"""
             <div style="background-color: #4fd1c5; color: #1a202c; padding: 10px 15px; 
@@ -244,13 +250,11 @@ if menu == "🚨 Delivery Issue":
             """,
             unsafe_allow_html=True
         )
-        st.dataframe(sub_display, use_container_width=True)
+        st.dataframe(format_df_quantity(sub_display), use_container_width=True)
 
-      # สร้างตารางสำหรับกลุ่ม To be decided (ถ้ามี)
       if not tbd_df.empty:
         tbd_display = tbd_df.drop(columns=["Is_TBD", "Clean_Qty", "Shipment date str"], errors="ignore")
         
-        # HTML/CSS Banner สำหรับ To be decided (สีส้ม Pastel)
         st.markdown(
             f"""
             <div style="background-color: #f6ad55; color: white; padding: 10px 15px; 
@@ -261,7 +265,7 @@ if menu == "🚨 Delivery Issue":
             """,
             unsafe_allow_html=True
         )
-        st.dataframe(tbd_display, use_container_width=True)
+        st.dataframe(format_df_quantity(tbd_display), use_container_width=True)
 
     else:
       st.info("ไม่พบรายการที่ต้องจัดส่งในขณะนี้")
@@ -326,7 +330,6 @@ elif menu == "📊 Stock Summary & Details":
 
     filtered_df = df.copy()
 
-    # กรองเฉพาะ Status ที่ยังไม่ถูก Delivered และ Qty > 0
     if "Status" in filtered_df.columns:
       filtered_df = filtered_df[
           ~filtered_df["Status"].astype(str).str.strip().str.lower().eq("delivered")
@@ -373,7 +376,7 @@ elif menu == "📊 Stock Summary & Details":
       with wc5: st.metric(label="WIP Total", value=f"{total_wip:,.2f}")
       
       st.markdown("")
-      st.dataframe(wip_stock_df, use_container_width=True)
+      st.dataframe(format_df_quantity(wip_stock_df), use_container_width=True)
     else:
       st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
 
@@ -393,12 +396,12 @@ elif menu == "📊 Stock Summary & Details":
       with fc5: st.metric(label="FG Total", value=f"{total_fg:,.2f}")
       
       st.markdown("")
-      st.dataframe(fg_stock_df, use_container_width=True)
+      st.dataframe(format_df_quantity(fg_stock_df), use_container_width=True)
     else:
       st.info("ไม่มีรายการสินค้า FG ในคลังขณะนี้")
 
     with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
-      st.dataframe(df, use_container_width=True)
+      st.dataframe(format_df_quantity(df), use_container_width=True)
   else:
     st.warning("ยังไม่มีข้อมูลในระบบ Google Sheets สำหรับประมวลผลสต็อก")
 
@@ -525,7 +528,7 @@ elif menu == "📈 Monthly Report":
     ]
     df_summary_rep = pd.DataFrame(summary_report_data)
     st.markdown("")
-    st.dataframe(df_summary_rep, use_container_width=True)
+    st.dataframe(format_df_quantity(df_summary_rep), use_container_width=True)
 
   with rep_tab2:
     st.subheader(f"🚚 Shipped Out Report ประจำเดือน {selected_month_label} {selected_year}")
@@ -533,9 +536,9 @@ elif menu == "📈 Monthly Report":
       reason_summary = monthly_shipped.groupby("Shipping Reason")["Clean_Shipped_Qty"].sum().reset_index()
       reason_summary.columns = ["Shipping Reason (เหตุผลการส่ง)", "Total Shipped Qty (จำนวนรวม)"]
       st.markdown("##### 📌 สรุปยอดจัดส่งแยกตามเหตุผล")
-      st.dataframe(reason_summary, use_container_width=True)
+      st.dataframe(format_df_quantity(reason_summary), use_container_width=True)
       st.markdown("##### 📋 รายละเอียดรายการส่งออกทั้งหมด")
-      st.dataframe(monthly_shipped, use_container_width=True)
+      st.dataframe(format_df_quantity(monthly_shipped), use_container_width=True)
     else:
       st.info(f"ℹ️ ไม่พบประวัติการส่งออกในเดือน {selected_month_label} {selected_year}")
 
@@ -602,7 +605,7 @@ elif menu == "📝 Trading Goods Registration":
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
   data = sheet.get_all_records()
-  if data: st.dataframe(pd.DataFrame(data), use_container_width=True)
+  if data: st.dataframe(format_df_quantity(pd.DataFrame(data)), use_container_width=True)
   else: st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
 
 # ==========================================
@@ -813,7 +816,7 @@ elif menu == "📦 Packing Module":
     st.divider()
     st.subheader("📑 ประวัติการผลิตและรหัส Lot FG แยกเกรด (Packing Records Sheet)")
     records_data = packing_records_sheet.get_all_records()
-    if records_data: st.dataframe(pd.DataFrame(records_data), use_container_width=True)
+    if records_data: st.dataframe(format_df_quantity(pd.DataFrame(records_data)), use_container_width=True)
 
 # ==========================================
 # หน้าที่ 7: Shipped Out Module
@@ -963,4 +966,4 @@ elif menu == "🚚 Shipped Out Module":
   st.divider()
   st.subheader("📑 ประวัติการส่งสินค้าออก (Shipped Out Log)")
   shipped_data = shipped_sheet.get_all_records()
-  if shipped_data: st.dataframe(pd.DataFrame(shipped_data), use_container_width=True)
+  if shipped_data: st.dataframe(format_df_quantity(pd.DataFrame(shipped_data)), use_container_width=True)
