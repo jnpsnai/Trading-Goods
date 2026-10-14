@@ -759,7 +759,7 @@ elif menu == "📦 Packing Module":
 
 
 # ==========================================
-# หน้าที่ 4: Shipped Out Module (รองรับหลายผลิตภัณฑ์ สูงสุด 10 ช่อง พร้อมปุ่มเพิ่ม/ลบ)
+# หน้าที่ 4: Shipped Out Module (Set default เป็น FG และแสดงรายละเอียดครบถ้วน)
 # ==========================================
 elif menu == "🚚 Shipped Out Module":
   st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
@@ -802,8 +802,9 @@ elif menu == "🚚 Shipped Out Module":
       })
     df_packing_fg = pd.DataFrame(converted_rows)
 
-  # เตรียมรายการ Lot ที่มีสต็อกคงเหลือ
+  # เตรียมรายการ Lot ที่มีสต็อกคงเหลือ พร้อมจัดรูปแบบแสดงรายละเอียด (Lot + ชื่อ + เกรด + ยอดคงเหลือ)
   wip_options = []
+  wip_display_map = {}
   wip_dict = {}
   if not df_main.empty and "Category" in df_main.columns:
     wip_available = df_main[
@@ -824,15 +825,23 @@ elif menu == "🚚 Shipped Out Module":
     ]
     for _, r in wip_available.iterrows():
       lot_no = str(r.get("THAI STICK Lot. No.", ""))
+      prod_name = str(r.get("Cultivar Name", ""))
+      grade_val = str(r.get("Grade", ""))
+      max_q = float(r["Clean_Qty"])
       if lot_no:
-        wip_options.append(lot_no)
+        display_str = (
+            f"{lot_no} | {prod_name} | เกรด: {grade_val} | คงเหลือ: {max_q:,.1f}"
+        )
+        wip_options.append(display_str)
+        wip_display_map[display_str] = lot_no
         wip_dict[lot_no] = {
-            "max_qty": float(r["Clean_Qty"]),
-            "product": r.get("Cultivar Name", ""),
-            "grade": r.get("Grade", ""),
+            "max_qty": max_q,
+            "product": prod_name,
+            "grade": grade_val,
         }
 
   fg_options = []
+  fg_display_map = {}
   fg_dict = {}
   if not df_packing_fg.empty:
     fg_available = df_packing_fg.copy()
@@ -840,16 +849,23 @@ elif menu == "🚚 Shipped Out Module":
     fg_available = fg_available[fg_available["Clean_Qty"] > 0]
     for _, r in fg_available.iterrows():
       lot_no = str(r.get("THAI STICK Lot. No.", ""))
+      prod_name = str(r.get("Export Name", ""))
+      grade_val = str(r.get("Grade", ""))
+      max_q = float(r["Clean_Qty"])
       if lot_no:
-        fg_options.append(lot_no)
+        display_str = (
+            f"{lot_no} | {prod_name} | เกรด: {grade_val} | คงเหลือ: {max_q:,.1f}"
+        )
+        fg_options.append(display_str)
+        fg_display_map[display_str] = lot_no
         fg_dict[lot_no] = {
-            "max_qty": float(r["Clean_Qty"]),
-            "product": r.get("Export Name", ""),
-            "grade": r.get("Grade", ""),
+            "max_qty": max_q,
+            "product": prod_name,
+            "grade": grade_val,
             "row_idx": r.get("Original_Row_Index"),
         }
 
-  # จัดการ Session State สำหรับจำนวนแถวสินค้าที่ต้องการส่งออก (เริ่มต้น 3 แถว รองรับถึง 10 ช่อง)
+  # จัดการ Session State สำหรับจำนวนแถวสินค้า (เริ่มต้น 3 แถว)
   if "ship_row_count" not in st.session_state:
     st.session_state.ship_row_count = 3
 
@@ -896,34 +912,49 @@ elif menu == "🚚 Shipped Out Module":
 
     for i in range(st.session_state.ship_row_count):
       st.markdown(f"**รายการที่ #{i+1}**")
-      row_c1, row_c2, row_c3 = st.columns([2, 3, 2])
+      row_c1, row_c2, row_c3 = st.columns([2, 4, 2])
 
       with row_c1:
+        # Set default เป็น FG (Finished Goods) โดยให้อยู่ลำดับแรก (index 0)
         item_cat = st.selectbox(
-            "ประเภท", ["WIP", "FG"], key=f"cat_{i}", label_visibility="collapsed"
+            "ประเภท",
+            ["FG (Finished Goods)", "WIP (Work in Progress)"],
+            key=f"cat_{i}",
+            label_visibility="collapsed",
         )
       with row_c2:
-        if item_cat == "WIP":
-          chosen_lot = st.selectbox(
-              "เลือก WIP Lot",
-              ["-- เลือก Lot WIP --"] + wip_options,
-              key=f"lot_wip_{i}",
-              label_visibility="collapsed",
-          )
-        else:
-          chosen_lot = st.selectbox(
+        if "FG" in item_cat:
+          chosen_display = st.selectbox(
               "เลือก FG Lot",
-              ["-- เลือก Lot FG --"] + fg_options,
+              ["-- เลือก Lot FG (Lot | ชื่อ | เกรด | คงเหลือ) --"] + fg_options,
               key=f"lot_fg_{i}",
               label_visibility="collapsed",
           )
+          chosen_lot = (
+              fg_display_map.get(chosen_display, "")
+              if chosen_display and not chosen_display.startswith("--")
+              else ""
+          )
+        else:
+          chosen_display = st.selectbox(
+              "เลือก WIP Lot",
+              ["-- เลือก Lot WIP (Lot | ชื่อ | เกรด | คงเหลือ) --"] + wip_options,
+              key=f"lot_wip_{i}",
+              label_visibility="collapsed",
+          )
+          chosen_lot = (
+              wip_display_map.get(chosen_display, "")
+              if chosen_display and not chosen_display.startswith("--")
+              else ""
+          )
+
       with row_c3:
-        # ดึง max qty มาแสดงเป็นคำแนะนำ
         max_q = 0.0
-        if item_cat == "WIP" and chosen_lot in wip_dict:
-          max_q = wip_dict[chosen_lot]["max_qty"]
-        elif item_cat == "FG" and chosen_lot in fg_dict:
-          max_q = fg_dict[chosen_lot]["max_qty"]
+        if chosen_lot:
+          if "FG" in item_cat and chosen_lot in fg_dict:
+            max_q = fg_dict[chosen_lot]["max_qty"]
+          elif "WIP" in item_cat and chosen_lot in wip_dict:
+            max_q = wip_dict[chosen_lot]["max_qty"]
 
         ship_q = st.number_input(
             f"จำนวน (Max: {max_q:,.1f})",
@@ -933,29 +964,24 @@ elif menu == "🚚 Shipped Out Module":
             key=f"qty_{i}",
         )
 
-      if (
-          chosen_lot
-          and not chosen_lot.startswith("--")
-          and ship_q > 0
-          and max_q > 0
-      ):
+      if chosen_lot and ship_q > 0 and max_q > 0:
         prod_name = (
-            wip_dict[chosen_lot]["product"]
-            if item_cat == "WIP"
-            else fg_dict[chosen_lot]["product"]
+            fg_dict[chosen_lot]["product"]
+            if "FG" in item_cat
+            else wip_dict[chosen_lot]["product"]
         )
         grade_val = (
-            wip_dict[chosen_lot]["grade"]
-            if item_cat == "WIP"
-            else fg_dict[chosen_lot]["grade"]
+            fg_dict[chosen_lot]["grade"]
+            if "FG" in item_cat
+            else wip_dict[chosen_lot]["grade"]
         )
-        row_idx = None if item_cat == "WIP" else fg_dict[chosen_lot]["row_idx"]
+        row_idx = (
+            fg_dict[chosen_lot]["row_idx"] if "FG" in item_cat else None
+        )
 
         shipment_items.append({
             "category": (
-                "WIP (Work in Progress)"
-                if item_cat == "WIP"
-                else "FG (Finished Goods)"
+                "FG (Finished Goods)" if "FG" in item_cat else "WIP (Work in Progress)"
             ),
             "lot_no": chosen_lot,
             "product": prod_name,
@@ -991,7 +1017,6 @@ elif menu == "🚚 Shipped Out Module":
           grade = item["grade"]
 
           if "WIP" in cat:
-            # คำนวณสต็อก WIP เดิม
             wip_info = wip_dict[lot]
             remaining_qty = wip_info["max_qty"] - qty
             new_status = "Delivered" if remaining_qty <= 0 else "Pending Packing"
@@ -1015,13 +1040,11 @@ elif menu == "🚚 Shipped Out Module":
                 f"A{matched_idx}:{col_end_letter}{matched_idx}", [row_values]
             )
           else:
-            # FG จาก Packing_Records
             fg_info = fg_dict[lot]
             remaining_qty = fg_info["max_qty"] - qty
             pack_rec_row_idx = int(fg_info["row_idx"])
             packing_records_sheet.update_cell(pack_rec_row_idx, 7, remaining_qty)
 
-          # บันทึกลง Shipped_Out_Log ทีละรายการ
           shipped_sheet.append_row([
               log_time,
               cat,
