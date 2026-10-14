@@ -13,13 +13,10 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* ธีมสีหลักและพื้นหลัง */
     .main {
         background-color: #f7f9fc;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
-    
-    /* กล่อง Metric โทน Pastel Mint / Soft Blue */
     .stMetric {
         background-color: #ffffff;
         padding: 18px;
@@ -31,8 +28,6 @@ st.markdown(
         color: #4a5568 !important;
         font-weight: 600;
     }
-    
-    /* ปุ่มกดโทน Pastel Green */
     .stButton>button {
         width: 100%;
         background-color: #68d391;
@@ -48,8 +43,6 @@ st.markdown(
         background-color: #48bb78;
         color: white;
     }
-    
-    /* Form Submit Button */
     .stFormSubmitButton>button {
         width: 100%;
         background-color: #4fd1c5;
@@ -62,8 +55,6 @@ st.markdown(
         background-color: #319795;
         color: white;
     }
-
-    /* Tabs ตกแต่งให้มนสวยงาม */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
@@ -101,9 +92,8 @@ client = init_connection()
 SHEET_NAME = "Trading Data Log"
 
 sh = client.open(SHEET_NAME)
-sheet = sh.get_worksheet(0)  # แผ่นหลักสำหรับ Registration (Trading Goods)
+sheet = sh.get_worksheet(0)
 
-# กำหนดโครงสร้าง Column Header
 EXPECTED_HEADERS = [
     "Cultivar Name",
     "Supplier Name",
@@ -122,12 +112,10 @@ EXPECTED_HEADERS = [
     "Packing date",
 ]
 
-# ตรวจสอบและซิงค์ Header แผ่นหลัก
 current_headers = sheet.row_values(1)
 if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
   sheet.update("A1:O1", [EXPECTED_HEADERS])
 
-# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Records
 try:
   packing_records_sheet = sh.worksheet("Packing_Records")
 except:
@@ -147,7 +135,6 @@ except:
       "Note",
   ])
 
-# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Log
 try:
   packing_sheet = sh.worksheet("Packing_Log")
 except:
@@ -164,7 +151,6 @@ except:
       "Note",
   ])
 
-# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Shipped Out Log
 try:
   shipped_sheet = sh.worksheet("Shipped_Out_Log")
 except:
@@ -183,7 +169,7 @@ except:
       "Note",
   ])
 
-# --- 4. Sidebar เมนูด้านซ้าย (จัดเรียงตามลำดับที่คุณต้องการ) ---
+# --- 4. Sidebar เมนูด้านซ้าย ---
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
@@ -199,13 +185,9 @@ menu = st.sidebar.radio(
     ],
 )
 st.sidebar.markdown("---")
-st.sidebar.info(
-    "ระบบจัดการสินค้า Trading และกระบวนการ Packing เชื่อมต่อ G-Sheets (Pastel"
-    " Theme)"
-)
+st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing (Pastel Theme)")
 
 
-# --- ฟังก์ชันแปลง Quantity เป็นตัวเลข ---
 def clean_quantity(val):
   try:
     return float(val)
@@ -214,7 +196,7 @@ def clean_quantity(val):
 
 
 # ==========================================
-# หน้าที่ 1: Delivery Issue (เมนูแรกสุด)
+# หน้าที่ 1: Delivery Issue
 # ==========================================
 if menu == "🚨 Delivery Issue":
   st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
@@ -255,7 +237,6 @@ if menu == "🚨 Delivery Issue":
       display_delivery_df = delivery_df.drop(
           columns=["Is_TBD", "Clean_Qty"], errors="ignore"
       )
-
       st.dataframe(display_delivery_df, use_container_width=True)
     else:
       st.info("ไม่พบรายการที่ต้องจัดส่งในขณะนี้")
@@ -264,7 +245,7 @@ if menu == "🚨 Delivery Issue":
 
 
 # ==========================================
-# หน้าที่ 2: Stock Summary & Details (เมนูที่สอง)
+# หน้าที่ 2: Stock Summary & Details
 # ==========================================
 elif menu == "📊 Stock Summary & Details":
   st.title("📊 Stock Summary & Details")
@@ -364,21 +345,21 @@ elif menu == "📊 Stock Summary & Details":
     st.subheader("📌 สรุปยอดรวมสต็อกในคลังทั้งหมด (Total Stock Summary)")
     col_m1, col_m2, col_m3 = st.columns(3)
     with col_m1:
-      st.metric(label="✨ ยอดรวมสต็อกทั้งหมด (Total Stock)", value=f"{total_on_hand:,.2f}")
+      st.metric(label="✨ ยอดรวมสต็อกทั้งหมด", value=f"{total_on_hand:,.2f}")
     with col_m2:
       st.metric(label="🧪 ยอดรวมประเภท WIP", value=f"{total_wip:,.2f}")
     with col_m3:
       st.metric(label="📦 ยอดรวมประเภท FG", value=f"{total_fg:,.2f}")
 
     st.divider()
-
     st.subheader("🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
     if not wip_stock_df.empty:
       wip_big = wip_stock_df[
           wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"
       ]["Clean_Qty"].sum()
       wip_small = wip_stock_df[
-          wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"
+          wip_stock_df["Grade"].astype(str).str.strip().str.lower()
+          == "small"
       ]["Clean_Qty"].sum()
       wip_mix = wip_stock_df[
           wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
@@ -405,14 +386,14 @@ elif menu == "📊 Stock Summary & Details":
       st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
 
     st.divider()
-
     st.subheader("📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
     if not fg_stock_df.empty:
       fg_big = fg_stock_df[
           fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"
       ]["Clean_Qty"].sum()
       fg_small = fg_stock_df[
-          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower()
+          == "small"
       ]["Clean_Qty"].sum()
       fg_mix = fg_stock_df[
           fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
@@ -445,7 +426,7 @@ elif menu == "📊 Stock Summary & Details":
 
 
 # ==========================================
-# หน้าที่ 3: Monthly Report (รายงานรายเดือนตามสั่ง)
+# หน้าที่ 3: Monthly Report (พร้อมระบบตรวจจับ No Activity)
 # ==========================================
 elif menu == "📈 Monthly Report":
   st.title("📈 Monthly Report (รายงานสรุปผลการดำเนินงานรายเดือน)")
@@ -453,14 +434,10 @@ elif menu == "📈 Monthly Report":
       "เลือกเดือนและปีที่ต้องการตรวจสอบรายงานสต็อกเคลื่อนไหวและประวัติการส่งออก"
   )
 
-  # เลือกปีและเดือน
   col_y, col_m = st.columns(2)
   with col_y:
     selected_year = st.selectbox(
-        "เลือกปี (Year)",
-        [2026, 2025, 2024, 2023],
-        index=0,
-        key="rep_year",
+        "เลือกปี (Year)", [2026, 2025, 2024, 2023], index=0, key="rep_year"
     )
   with col_m:
     months_dict = {
@@ -484,26 +461,21 @@ elif menu == "📈 Monthly Report":
 
   st.divider()
 
-  # Tab สำหรับแยก 2 รายงาน
   rep_tab1, rep_tab2 = st.tabs([
       "📊 1. Monthly On-Hand Stock Report (WIP & FG)",
       "🚚 2. Shipped Out Report & Reasons",
   ])
 
-  # --- ดึงข้อมูล Shipped Out Log มาคำนวณ ---
   shipped_data = shipped_sheet.get_all_records()
   df_shipped = pd.DataFrame(shipped_data) if shipped_data else pd.DataFrame()
   if not df_shipped.empty:
     df_shipped.columns = [str(c).strip() for c in df_shipped.columns]
-    # แปลง Shipment Date เป็น datetime เพื่อกรองเดือน/ปี
     df_shipped["Parsed_Date"] = pd.to_datetime(
         df_shipped["Shipment Date"], errors="coerce"
     )
     df_shipped["Clean_Shipped_Qty"] = df_shipped["Shipped Qty"].apply(
         clean_quantity
     )
-
-    # กรองเฉพาะเดือน/ปีที่เลือก
     monthly_shipped = df_shipped[
         (df_shipped["Parsed_Date"].dt.year == selected_year)
         & (df_shipped["Parsed_Date"].dt.month == selected_month_num)
@@ -511,45 +483,49 @@ elif menu == "📈 Monthly Report":
   else:
     monthly_shipped = pd.DataFrame()
 
-  # --- 1. Monthly On-Hand Stock Report ---
   with rep_tab1:
     st.subheader(
         f"📅 รายงานความเคลื่อนไหวสต็อกประจำเดือน {selected_month_label}"
         f" {selected_year}"
     )
-    st.markdown(
-        "สรุปภาพรวม ยอดยกมา (Beginning Stock), รับเข้า (Received/Inbound),"
-        " เบิกออก/ส่งออก (Outbound/Shipped), และยอดยคงเหลือ (Ending On-Hand"
-        " Stock)"
-    )
 
-    # ดึงข้อมูล Main Sheet (รับเข้า)
     main_data = sheet.get_all_records()
     df_main_rep = pd.DataFrame(main_data) if main_data else pd.DataFrame()
-
-    # ดึงข้อมูล Packing Records (FG รับเข้าจากการแพ็ก)
     pack_data = packing_records_sheet.get_all_records()
     df_pack_rep = pd.DataFrame(pack_data) if pack_data else pd.DataFrame()
 
-    # คำนวณยอดรวมเบื้องต้น (ยอดยกมา + รับเข้าเดือนนี้ - ส่งออกเดือนนี้)
+    has_wip_activity = False
     wip_receive_total = 0.0
-    fg_receive_total = 0.0
-
     if not df_main_rep.empty:
       df_main_rep.columns = [str(c).strip() for c in df_main_rep.columns]
       for _, r in df_main_rep.iterrows():
         cat = str(r.get("Category", ""))
+        rec_date = str(r.get("Receive date", ""))
         q = clean_quantity(r.get("Quantity", 0))
         if "WIP" in cat:
-          wip_receive_total += q
+          try:
+            p_dt = datetime.strptime(rec_date, "%Y-%m-%d")
+            if p_dt.year == selected_year and p_dt.month == selected_month_num:
+              wip_receive_total += q
+              has_wip_activity = True
+          except:
+            pass
 
+    has_fg_activity = False
+    fg_receive_total = 0.0
     if not df_pack_rep.empty:
       df_pack_rep.columns = [str(c).strip() for c in df_pack_rep.columns]
       for _, r in df_pack_rep.iterrows():
+        p_date = str(r.get("Packing Date", ""))
         q = clean_quantity(r.get("Quantity", 0))
-        fg_receive_total += q
+        try:
+          p_dt = datetime.strptime(p_date, "%Y-%m-%d")
+          if p_dt.year == selected_year and p_dt.month == selected_month_num:
+            fg_receive_total += q
+            has_fg_activity = True
+        except:
+          pass
 
-    # ยอดส่งออกจาก Shipped Log ในเดือนนี้แยกตามประเภท
     wip_shipped_monthly = 0.0
     fg_shipped_monthly = 0.0
     if not monthly_shipped.empty:
@@ -558,71 +534,59 @@ elif menu == "📈 Monthly Report":
         sq = clean_quantity(r.get("Clean_Shipped_Qty", 0))
         if "WIP" in cat:
           wip_shipped_monthly += sq
+          has_wip_activity = True
         else:
           fg_shipped_monthly += sq
+          has_fg_activity = True
 
-    # สรุปตารางรายงานภาพรวมสต็อกรายเดือน
+    if not has_wip_activity:
+      st.warning(
+          f"⚠️ **WIP (Work in Progress):** ไม่มีกิจกรรมหรือ Transaction"
+          f" การเคลื่อนไหวใดๆ ในเดือน {selected_month_label} {selected_year}"
+      )
+    if not has_fg_activity:
+      st.warning(
+          f"⚠️ **FG (Finished Goods):** ไม่มีกิจกรรมหรือ Transaction"
+          f" การเคลื่อนไหวใดๆ ในเดือน {selected_month_label} {selected_year}"
+      )
+
     summary_report_data = [
         {
             "Category": "WIP (Work in Progress)",
-            "Beginning Stock (ยอดยกมา)": max(
-                0.0, wip_receive_total - wip_shipped_monthly
+            "Status Activity": (
+                "🟢 Active" if has_wip_activity else "⚪ No Activity (นิ่ง)"
             ),
-            "Received / Inbound (รับเข้า)": wip_receive_total,
-            "Shipped Out / Outbound (เบิกออก)": wip_shipped_monthly,
-            "Ending On-Hand Stock (คงเหลือสิ้นเดือน)": max(
+            "Beginning Stock": max(0.0, wip_receive_total - wip_shipped_monthly),
+            "Received / Inbound": wip_receive_total,
+            "Shipped Out / Outbound": wip_shipped_monthly,
+            "Ending On-Hand Stock": max(
                 0.0, wip_receive_total - wip_shipped_monthly
             ),
         },
         {
             "Category": "FG (Finished Goods)",
-            "Beginning Stock (ยอดยกมา)": max(
-                0.0, fg_receive_total - fg_shipped_monthly
+            "Status Activity": (
+                "🟢 Active" if has_fg_activity else "⚪ No Activity (นิ่ง)"
             ),
-            "Received / Inbound (รับเข้า)": fg_receive_total,
-            "Shipped Out / Outbound (เบิกออก)": fg_shipped_monthly,
-            "Ending On-Hand Stock (คงเหลือสิ้นเดือน)": max(
+            "Beginning Stock": max(0.0, fg_receive_total - fg_shipped_monthly),
+            "Received / Inbound": fg_receive_total,
+            "Shipped Out / Outbound": fg_shipped_monthly,
+            "Ending On-Hand Stock": max(
                 0.0, fg_receive_total - fg_shipped_monthly
             ),
         },
     ]
 
     df_summary_rep = pd.DataFrame(summary_report_data)
-
-    # แสดง Metric สรุปยอดรวม
-    tot_beg = df_summary_rep["Beginning Stock (ยอดยกมา)"].sum()
-    tot_rec = df_summary_rep["Received / Inbound (รับเข้า)"].sum()
-    tot_ship = df_summary_rep["Shipped Out / Outbound (เบิกออก)"].sum()
-    tot_end = df_summary_rep[
-        "Ending On-Hand Stock (คงเหลือสิ้นเดือน)"
-    ].sum()
-
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-      st.metric(label="ยอดยกมา (Beginning)", value=f"{tot_beg:,.2f}")
-    with m2:
-      st.metric(label="รับเข้ารวม (Inbound)", value=f"{tot_rec:,.2f}")
-    with m3:
-      st.metric(label="เบิกออกรวม (Outbound)", value=f"{tot_ship:,.2f}")
-    with m4:
-      st.metric(label="คงเหลือสิ้นเดือน (Ending)", value=f"{tot_end:,.2f}")
-
     st.markdown("")
     st.dataframe(df_summary_rep, use_container_width=True)
 
-  # --- 2. Shipped Out Report & Reasons ---
   with rep_tab2:
     st.subheader(
         f"🚚 Shipped Out Report ประจำเดือน {selected_month_label}"
         f" {selected_year}"
     )
-    st.markdown(
-        "รายละเอียดการจัดส่งสินค้าออกทั้งหมดในเดือน พร้อมสรุปจำนวนแยกตามประเภท"
-        " และเหตุผลในการส่ง (Shipping Reason)"
-    )
-
     if not monthly_shipped.empty:
-      # สรุปยอดแยกตาม Shipping Reason
       reason_summary = (
           monthly_shipped.groupby("Shipping Reason")["Clean_Shipped_Qty"]
           .sum()
@@ -632,32 +596,15 @@ elif menu == "📈 Monthly Report":
           "Shipping Reason (เหตุผลการส่ง)",
           "Total Shipped Qty (จำนวนรวม)",
       ]
-
-      st.markdown("##### 📌 สรุปยอดจัดส่งแยกตามเหตุผล (Summary by Reason)")
+      st.markdown("##### 📌 สรุปยอดจัดส่งแยกตามเหตุผล")
       st.dataframe(reason_summary, use_container_width=True)
 
-      st.markdown("##### 📋 รายละเอียดรายการส่งออกทั้งหมดในเดือนนี้")
-      display_cols = [
-          "Timestamp",
-          "Category",
-          "Lot No.",
-          "Cultivar / Product",
-          "Grade",
-          "Shipped Qty",
-          "Consignee (ปลายทาง)",
-          "Client (ลูกค้า)",
-          "Shipping Reason",
-          "Shipment Date",
-          "Note",
-      ]
-      available_cols = [
-          c for c in display_cols if c in monthly_shipped.columns
-      ]
-      st.dataframe(monthly_shipped[available_cols], use_container_width=True)
+      st.markdown("##### 📋 รายละเอียดรายการส่งออกทั้งหมด")
+      st.dataframe(monthly_shipped, use_container_width=True)
     else:
       st.info(
           f"ℹ️ ไม่พบประวัติการส่งสินค้าออกในเดือน {selected_month_label}"
-          f" {selected_year}"
+          f" {selected_year} (ไม่มีกิจกรรมการส่งออก)"
       )
 
 
@@ -670,7 +617,6 @@ elif menu == "📝 Trading Goods Registration":
 
   with st.form("trading_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
-
     with col1:
       cultivar_name = st.text_input("1. Cultivar Name")
       supplier_name = st.text_input("2. Supplier Name")
@@ -680,50 +626,59 @@ elif menu == "📝 Trading Goods Registration":
       category = st.selectbox(
           "6. Category", ["FG (Finished Goods)", "WIP (Work in Progress)"]
       )
-      grades_opt = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
-      grade = st.selectbox("7. Grade", grades_opt)
-
-    with col2:
-      receive_date_val = st.date_input(
-          "8. Receive date (Column H)", value=date.today(), key="reg_receive_date"
+      grade = st.selectbox(
+          "7. Grade", ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
       )
-      receive_date_str = str(receive_date_val)
-
+    with col2:
+      receive_date_str = str(
+          st.date_input(
+              "8. Receive date (Column H)",
+              value=date.today(),
+              key="reg_rec_dt",
+          )
+      )
       quantity = st.number_input("9. Quantity", min_value=0.0, step=0.1)
       inspection_req = st.selectbox("10. Inspection Req.", ["Yes", "No"])
       ir_req = st.selectbox("11. IR Req.", ["Yes", "No"])
-
-      date_val = st.date_input("12. Shipment date", value=date.today())
-      is_tbd = st.checkbox("To be decided")
-      shipment_date = "To be decided" if is_tbd else str(date_val)
-
-      types_opt = [
-          "Inspection & Packing Service",
-          "Trading Goods (TS)",
-          "Consignment",
-          "In House Product",
-      ]
-      prod_type = st.selectbox("13. Type", types_opt)
-
-      status_opt = [
-          "Trading Goods Received to Stock",
-          "Inspection Completed",
-          "Pending Packing",
-          "Packing done",
-          "Delivered",
-          "Waiting for Return",
-      ]
-      status = st.selectbox("14. Status", status_opt)
-
-      pack_date_val = st.date_input(
-          "15. Packing date (Column O)", value=date.today(), key="reg_pack_date"
+      is_tbd = st.checkbox("To be decided", key="reg_tbd")
+      shipment_date = (
+          "To be decided"
+          if is_tbd
+          else str(
+              st.date_input(
+                  "12. Shipment date", value=date.today(), key="reg_ship_dt"
+              )
+          )
       )
-      packing_date_str = str(pack_date_val)
+      prod_type = st.selectbox(
+          "13. Type",
+          [
+              "Inspection & Packing Service",
+              "Trading Goods (TS)",
+              "Consignment",
+              "In House Product",
+          ],
+      )
+      status = st.selectbox(
+          "14. Status",
+          [
+              "Trading Goods Received to Stock",
+              "Inspection Completed",
+              "Pending Packing",
+              "Packing done",
+              "Delivered",
+              "Waiting for Return",
+          ],
+      )
+      packing_date_str = str(
+          st.date_input(
+              "15. Packing date (Column O)",
+              value=date.today(),
+              key="reg_pack_dt",
+          )
+      )
 
-    st.markdown("")
-    submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
-
-    if submitted:
+    if st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets"):
       latest_headers = sheet.row_values(1)
       row_dict = {
           "Cultivar Name": cultivar_name,
@@ -742,16 +697,14 @@ elif menu == "📝 Trading Goods Registration":
           "Status": status,
           "Packing date": packing_date_str,
       }
-      row_data = [str(row_dict.get(h, "")) for h in latest_headers]
-      sheet.append_row(row_data)
+      sheet.append_row([str(row_dict.get(h, "")) for h in latest_headers])
       st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
 
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
   data = sheet.get_all_records()
   if data:
-    df = pd.DataFrame(data)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(pd.DataFrame(data), use_container_width=True)
   else:
     st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
 
