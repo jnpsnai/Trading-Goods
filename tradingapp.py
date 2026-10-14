@@ -176,22 +176,23 @@ if menu == "📝 Trading Goods Registration":
     submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
 
     if submitted:
-      # ใช้ gspread_dataframe หรือ append ผ่าน dict/list ตามลำดับ Expected Headers เป๊ะๆ
-      row_data = [
-          cultivar_name,
-          supplier_name,
-          supplier_lot,
-          export_name,
-          thai_stick_lot,
-          category,
-          grade,
-          str(quantity),
-          inspection_req,
-          ir_req,
-          shipment_date,
-          prod_type,
-          status,
-      ]
+      latest_headers = sheet.row_values(1)
+      row_dict = {
+          "Cultivar Name": cultivar_name,
+          "Supplier Name": supplier_name,
+          "Supplier Lot. No.": supplier_lot,
+          "Export Name": export_name,
+          "THAI STICK Lot. No.": thai_stick_lot,
+          "Category": category,
+          "Grade": grade,
+          "Quantity": str(quantity),
+          "Inspection Req.": inspection_req,
+          "IR Req.": ir_req,
+          "Shipment date": shipment_date,
+          "Type": prod_type,
+          "Status": status,
+      }
+      row_data = [str(row_dict.get(h, "")) for h in latest_headers]
       sheet.append_row(row_data)
       st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
 
@@ -361,10 +362,37 @@ elif menu == "✏️ Edit Registration":
         )
 
         if update_submitted:
-          # ใช้ Header ล่าสุดจาก Google Sheet มาเป็นตัวจัดเรียงข้อมูลแบบไดนามิก (ป้องกันสลับคอลัมน์)
           latest_headers = sheet.row_values(1)
           updated_dict = {
               "Cultivar Name": e_cultivar,
               "Supplier Name": e_supplier,
               "Supplier Lot. No.": e_supp_lot,
-              "Export Name": e_export
+              "Export Name": e_export,
+              "THAI STICK Lot. No.": e_thai_lot,
+              "Category": e_category,
+              "Grade": e_grade,
+              "Quantity": str(e_qty),
+              "Inspection Req.": e_insp,
+              "IR Req.": e_ir,
+              "Shipment date": e_shipment_date,
+              "Type": e_type,
+              "Status": e_status,
+          }
+          updated_row_data = [
+              str(updated_dict.get(h, "")) for h in latest_headers
+          ]
+
+          col_end_letter = chr(64 + len(latest_headers)).upper()
+          sheet.update(
+              f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}",
+              [updated_row_data],
+          )
+          st.success(f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉")
+  else:
+    st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
+
+
+# ==========================================
+# หน้าที่ 3: Packing Module
+# ==========================================
+elif menu ==
