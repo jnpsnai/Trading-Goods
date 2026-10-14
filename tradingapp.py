@@ -1233,4 +1233,9 @@ elif menu == "🚚 Shipped Out Module":
             )
           else:
             all_pack_records = packing_records_sheet.get_all_records()
-            if row_idx_fg and
+            if row_idx_fg and (row_idx_fg - 2) < len(all_pack_records):
+              current_fg_qty = clean_quantity(
+                  all_pack_records[row_idx_fg - 2].get("Quantity", 0)
+              )
+              remaining_qty = max(0.0, current_fg_qty - qty)
+              packing_records_sheet.update_cell(row_idx_fg, 7, remaining_qty)
