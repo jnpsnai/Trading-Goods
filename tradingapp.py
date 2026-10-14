@@ -9,7 +9,7 @@ st.set_page_config(
     page_title="Thai Stick Trading Portal", page_icon="🌱", layout="wide"
 )
 
-# --- 2. Custom CSS สำหรับตกแต่ง Template ให้สวยงามพรีเมียม ---
+# --- 2. Custom CSS สำหรับตกแต่ง Template ---
 st.markdown(
     """
     <style>
@@ -55,7 +55,25 @@ def init_connection():
 
 client = init_connection()
 SHEET_NAME = "Trading Data Log"
-sheet = client.open(SHEET_NAME).sheet1
+
+# ตรวจสอบและสร้าง Sheet ย่อยสำหรับบันทึกประวัติการ Pack (ถ้ายังไม่มี)
+sh = client.open(SHEET_NAME)
+sheet = sh.get_worksheet(0)  # แผ่นหลักสำหรับ Registration
+
+try:
+  packing_sheet = sh.worksheet("Packing_Log")
+except:
+  packing_sheet = sh.add_worksheet(title="Packing_Log", rows="1000", cols="10")
+  packing_sheet.append_row([
+      "Timestamp",
+      "Source WIP Lot",
+      "Cultivar",
+      "Packed FG Name",
+      "Grade",
+      "Packed Qty",
+      "Waste Qty",
+      "Note",
+  ])
 
 # --- 4. Sidebar เมนูด้านซ้าย ---
 st.sidebar.title("🌱 Thai Stick Trading")
@@ -65,16 +83,15 @@ menu = st.sidebar.radio(
     [
         "📝 Trading Goods Registration",
         "✏️ Edit Registration",
+        "📦 Packing Module",
         "📊 Overall Stock Dashboard",
     ],
 )
 st.sidebar.markdown("---")
-st.sidebar.info(
-    "ระบบบันทึกและจัดการข้อมูลสินค้า Trading เชื่อมต่อกับ Google Sheets แบบเรียลไทม์"
-)
+st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing เชื่อมต่อ G-Sheets")
 
 
-# --- ฟังก์ชันแปลง Quantity เป็นตัวเลขเพื่อคำนวณ ---
+# --- ฟังก์ชันแปลง Quantity เป็นตัวเลข ---
 def clean_quantity(val):
   try:
     return float(val)
@@ -83,11 +100,11 @@ def clean_quantity(val):
 
 
 # ==========================================
-# หน้าที่ 1: Trading Goods Registration (ลงข้อมูลใหม่)
+# หน้าที่ 1: Trading Goods Registration (เพิ่ม Category: WIP / FG)
 # ==========================================
 if menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
-  st.markdown("กรอกข้อมูลผลิตภัณฑ์และรายละเอียดล็อตสินค้าใหม่ลงในระบบ")
+  st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
 
   with st.form("trading_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
@@ -98,9 +115,12 @@ if menu == "📝 Trading Goods Registration":
       supplier_lot = st.text_input("3. Supplier Lot. No.")
       export_name = st.text_input("4. Export Name")
       thai_stick_lot = st.text_input("5. THAI STICK Lot. No.")
-      grade = st.selectbox(
-          "6. Grade", ["Big", "Small", "Mix", "Grade A", "Premium"]
-      )
+
+      # เพิ่มฟิลด์ Category: WIP หรือ FG
+      category = st.selectbox("Category", ["FG (Finished Goods)", "WIP (Work in Progress)"])
+
+      grades_opt = ["Big", "Small", "Mix", "Grade A", "Premium"]
+      grade = st.selectbox("6. Grade", grades_opt)
 
     with col2:
       quantity = st.number_input("7. Quantity", min_value=0.0, step=0.1)
@@ -109,43 +129,38 @@ if menu == "📝 Trading Goods Registration":
 
       date_val = st.date_input("10. Shipment date", value=date.today())
       is_tbd = st.checkbox("To be decided")
+      shipment_date = "To be decided" if is_tbd else str(date_val)
 
-      if is_tbd:
-        shipment_date = "To be decided"
-      else:
-        shipment_date = str(date_val)
+      types_opt = [
+          "Inspection & Packing Service",
+          "Trading Goods (TS)",
+          "Consignment",
+          "In House Product",
+      ]
+      prod_type = st.selectbox("11. Type", types_opt)
 
-      prod_type = st.selectbox(
-          "11. Type",
-          [
-              "Inspection & Packing Service",
-              "Trading Goods (TS)",
-              "Consignment",
-              "In House Product",
-          ],
-      )
-
-      status = st.selectbox(
-          "12. Status",
-          [
-              "Trading Goods Received to Stock",
-              "Inspection Completed",
-              "Pending Packing",
-              "Delivered",
-              "Waiting for Return",
-          ],
-      )
+      status_opt = [
+          "Trading Goods Received to Stock",
+          "Inspection Completed",
+          "Pending Packing",
+          "Packing done",
+          "Delivered",
+          "Waiting for Return",
+      ]
+      status = st.selectbox("12. Status", status_opt)
 
     st.markdown("")
     submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
 
     if submitted:
+      # บันทึกโดยแนบ Category ไว้ที่หัวข้อท้ายสุดหรือรวมในข้อมูล (ใช้ 13 คอลัมน์)
       row_data = [
           cultivar_name,
           supplier_name,
           supplier_lot,
           export_name,
           thai_stick_lot,
+          category,  # เพิ่มคอลัมน์ Category
           grade,
           str(quantity),
           inspection_req,
@@ -168,19 +183,15 @@ if menu == "📝 Trading Goods Registration":
 
 
 # ==========================================
-# หน้าที่ 2: Edit Registration (แก้ไขข้อมูลเดิม)
+# หน้าที่ 2: Edit Registration
 # ==========================================
 elif menu == "✏️ Edit Registration":
   st.title("✏️ Edit Registration Data")
-  st.markdown(
-      "ค้นหาและแก้ไขข้อมูลล็อตสินค้าที่เคยบันทึกไว้ (อัปเดตข้อมูลเดิมใน Google"
-      " Sheets)"
-  )
+  st.markdown("ค้นหาและแก้ไขข้อมูลล็อตสินค้าที่เคยบันทึกไว้")
 
   data = sheet.get_all_records()
   if data:
     df_all = pd.DataFrame(data)
-
     lot_column = (
         "THAI STICK Lot. No."
         if "THAI STICK Lot. No." in df_all.columns
@@ -188,20 +199,13 @@ elif menu == "✏️ Edit Registration":
     )
 
     lot_list = df_all[lot_column].astype(str).tolist()
-    selected_lot = st.selectbox(
-        "🔍 เลือก THAI STICK Lot. No. ที่ต้องการแก้ไข", lot_list
-    )
+    selected_lot = st.selectbox("🔍 เลือก THAI STICK Lot. No. ที่ต้องการแก้ไข", lot_list)
 
     if selected_lot:
       matched_row_idx = (
-          int(
-              df_all[df_all[lot_column].astype(str) == selected_lot].index[0]
-          )
-          + 2
+          int(df_all[df_all[lot_column].astype(str) == selected_lot].index[0]) + 2
       )
-      current_data = df_all[df_all[lot_column].astype(str) == selected_lot].iloc[
-          0
-      ]
+      current_data = df_all[df_all[lot_column].astype(str) == selected_lot].iloc[0]
 
       st.info(f"กำลังแก้ไขข้อมูลของล็อต: **{selected_lot}**")
 
@@ -209,83 +213,42 @@ elif menu == "✏️ Edit Registration":
         col1, col2 = st.columns(2)
 
         with col1:
-          e_cultivar = st.text_input(
-              "1. Cultivar Name",
-              value=str(current_data.get("Cultivar Name", "")),
-          )
-          e_supplier = st.text_input(
-              "2. Supplier Name",
-              value=str(current_data.get("Supplier Name", "")),
-          )
-          e_supp_lot = st.text_input(
-              "3. Supplier Lot. No.",
-              value=str(current_data.get("Supplier Lot. No.", "")),
-          )
-          e_export = st.text_input(
-              "4. Export Name", value=str(current_data.get("Export Name", ""))
-          )
-          e_thai_lot = st.text_input(
-              "5. THAI STICK Lot. No.",
-              value=str(current_data.get("THAI STICK Lot. No.", "")),
-          )
+          e_cultivar = st.text_input("1. Cultivar Name", value=str(current_data.get("Cultivar Name", "")))
+          e_supplier = st.text_input("2. Supplier Name", value=str(current_data.get("Supplier Name", "")))
+          e_supp_lot = st.text_input("3. Supplier Lot. No.", value=str(current_data.get("Supplier Lot. No.", "")))
+          e_export = st.text_input("4. Export Name", value=str(current_data.get("Export Name", "")))
+          e_thai_lot = st.text_input("5. THAI STICK Lot. No.", value=str(current_data.get("THAI STICK Lot. No.", "")))
+
+          cat_opt = ["FG (Finished Goods)", "WIP (Work in Progress)"]
+          old_cat = str(current_data.get("Category", "FG (Finished Goods)"))
+          e_category = st.selectbox("Category", cat_opt, index=cat_opt.index(old_cat) if old_cat in cat_opt else 0)
 
           grades_opt = ["Big", "Small", "Mix", "Grade A", "Premium"]
           old_grade = str(current_data.get("Grade", "Big"))
-          e_grade = st.selectbox(
-              "6. Grade",
-              grades_opt,
-              index=grades_opt.index(old_grade)
-              if old_grade in grades_opt
-              else 0,
-          )
+          e_grade = st.selectbox("6. Grade", grades_opt, index=grades_opt.index(old_grade) if old_grade in grades_opt else 0)
 
         with col2:
           try:
             old_qty = float(current_data.get("Quantity", 0.0))
           except:
             old_qty = 0.0
-          e_qty = st.number_input(
-              "7. Quantity", min_value=0.0, step=0.1, value=old_qty
-          )
+          e_qty = st.number_input("7. Quantity", min_value=0.0, step=0.1, value=old_qty)
 
           insp_opt = ["Yes", "No"]
           old_insp = str(current_data.get("Inspection Req.", "No"))
-          e_insp = st.selectbox(
-              "8. Inspection Req.",
-              insp_opt,
-              index=insp_opt.index(old_insp) if old_insp in insp_opt else 0,
-          )
+          e_insp = st.selectbox("8. Inspection Req.", insp_opt, index=insp_opt.index(old_insp) if old_insp in insp_opt else 0)
 
           ir_opt = ["Yes", "No"]
           old_ir = str(current_data.get("IR Req.", "No"))
-          e_ir = st.selectbox(
-              "9. IR Req.",
-              ir_opt,
-              index=ir_opt.index(old_ir) if old_ir in ir_opt else 0,
-          )
+          e_ir = st.selectbox("9. IR Req.", ir_opt, index=ir_opt.index(old_ir) if old_ir in ir_opt else 0)
 
           old_date = str(current_data.get("Shipment date", ""))
           is_tbd_default = old_date == "To be decided"
+          default_dt = date.today() if is_tbd_default else datetime.strptime(old_date, "%Y-%m-%d").date() rescue date.today() if False else date.today()
 
-          if is_tbd_default:
-            default_dt = date.today()
-          else:
-            try:
-              default_dt = datetime.strptime(old_date, "%Y-%m-%d").date()
-            except:
-              default_dt = date.today()
-
-          e_is_tbd = st.checkbox(
-              "To be decided", value=is_tbd_default, key="edit_tbd"
-          )
-          e_date_input = st.date_input(
-              "10. Shipment date", value=default_dt, key="edit_date"
-          )
-
-          if e_is_tbd:
-            e_shipment_date = "To be decided"
-          else:
-            e_shipment_date = str(e_date_input)
+          e_is_tbd = st.checkbox("To be decided", value=is_tbd_default, key="edit_tbd")
+          e_date_input = st.date_input("10. Shipment date", value=default_dt, key="edit_date")
+          e_shipment_date = "To be decided" if e_is_tbd else str(e_date_input)
 
           types_opt = [
               "Inspection & Packing Service",
@@ -294,32 +257,21 @@ elif menu == "✏️ Edit Registration":
               "In House Product",
           ]
           old_type = str(current_data.get("Type", ""))
-          e_type = st.selectbox(
-              "11. Type",
-              types_opt,
-              index=types_opt.index(old_type) if old_type in types_opt else 0,
-          )
+          e_type = st.selectbox("11. Type", types_opt, index=types_opt.index(old_type) if old_type in types_opt else 0)
 
           status_opt = [
               "Trading Goods Received to Stock",
               "Inspection Completed",
               "Pending Packing",
+              "Packing done",
               "Delivered",
               "Waiting for Return",
           ]
           old_status = str(current_data.get("Status", ""))
-          e_status = st.selectbox(
-              "12. Status",
-              status_opt,
-              index=status_opt.index(old_status)
-              if old_status in status_opt
-              else 0,
-          )
+          e_status = st.selectbox("12. Status", status_opt, index=status_opt.index(old_status) if old_status in status_opt else 0)
 
         st.markdown("")
-        update_submitted = st.form_submit_button(
-            "🔄 อัปเดตข้อมูล (Update Google Sheets)"
-        )
+        update_submitted = st.form_submit_button("🔄 อัปเดตข้อมูล (Update Google Sheets)")
 
         if update_submitted:
           updated_row_data = [
@@ -328,6 +280,7 @@ elif menu == "✏️ Edit Registration":
               e_supp_lot,
               e_export,
               e_thai_lot,
+              e_category,
               e_grade,
               str(e_qty),
               e_insp,
@@ -336,89 +289,84 @@ elif menu == "✏️ Edit Registration":
               e_type,
               e_status,
           ]
-          sheet.update(f"A{matched_row_idx}:L{matched_row_idx}", [updated_row_data])
-          st.success(
-              f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉 กรุณารีเฟรชหน้าจอ"
-          )
-
+          sheet.update(f"A{matched_row_idx}:M{matched_row_idx}", [updated_row_data])
+          st.success(f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉")
   else:
-    st.info("ยังไม่มีข้อมูลในระบบ Google Sheets ให้แก้ไข")
+    st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
 
 
 # ==========================================
-# หน้าที่ 3: Overall Stock (สรุปและแดชบอร์ด)
+# หน้าที่ 3: Packing Module (ใหม่!)
 # ==========================================
-elif menu == "📊 Overall Stock Dashboard":
-  st.title("📊 Overall Stock Dashboard")
-  st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock)")
+elif menu == "📦 Packing Module":
+  st.title("📦 Packing Module (WIP Conversion & Waste Logging)")
+  st.markdown("ดึงวัตถุดิบ WIP จากการ Register มาทำการแพ็ก บันทึกยอดผลิตภัณฑ์ที่ได้ พร้อมตัดสต็อกอัตโนมัติ")
 
   data = sheet.get_all_records()
-
   if data:
     df = pd.DataFrame(data)
 
-    if "Quantity" in df.columns:
-      df["Clean_Qty"] = df["Quantity"].apply(clean_quantity)
+    # ค้นหาล็อตที่เป็น WIP และยังไม่หมดสต็อก
+    if "Category" in df.columns:
+      wip_df = df[df["Category"].astype(str).str.contains("WIP", case=False, na=False)].copy()
     else:
-      df["Clean_Qty"] = 0.0
+      wip_df = pd.DataFrame()
 
-    filtered_df = df.copy()
+    if not wip_df.empty:
+      wip_df["Clean_Qty"] = wip_df["Quantity"].apply(clean_quantity)
+      # กรองเฉพาะตัวที่มีจำนวนเหลือมากกว่า 0
+      available_wip = wip_df[wip_df["Clean_Qty"] > 0]
 
-    if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
-      filtered_df = filtered_df[
-          (
-              filtered_df["Status"]
-              .astype(str)
-              .str.strip()
-              .str.lower()
-              .ne("delivered")
-          )
-          & (
-              filtered_df["Type"]
-              .astype(str)
-              .str.strip()
-              .str.lower()
-              .ne("inspection & packing service")
-          )
-      ]
+      if not available_wip.empty:
+        wip_lot_list = available_wip["THAI STICK Lot. No."].astype(str).tolist()
 
-    if "Grade" in filtered_df.columns:
-      stock_big = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "big"
-      ]["Clean_Qty"].sum()
-      stock_small = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "small"
-      ]["Clean_Qty"].sum()
-      stock_mix = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "mix"
-      ]["Clean_Qty"].sum()
-      total_on_hand = filtered_df["Clean_Qty"].sum()
-    else:
-      stock_big, stock_small, stock_mix, total_on_hand = 0, 0, 0, 0
+        selected_wip_lot = st.selectbox("🔍 เลือก WIP Lot ที่ต้องการนำมาแพ็ก", wip_lot_list)
 
-    st.subheader("📦 On-hand Stock Summary (แยกตามเกรด)")
-    st.markdown(
-        "*เงื่อนไขการคำนวณ: ไม่รวมรายการที่มี Status เป็น 'Delivered' และ Type"
-        " เป็น 'Inspection & Packing Service'"
-    )
+        selected_row = available_wip[available_wip["THAI STICK Lot. No."].astype(str) == selected_wip_lot].iloc[0]
+        max_wip_qty = float(selected_row["Clean_Qty"])
+        cultivar_val = selected_row.get("Cultivar Name", "")
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-      st.metric(label="🟢 Grade: Big", value=f"{stock_big:,.2f}")
-    with col2:
-      st.metric(label="🔵 Grade: Small", value=f"{stock_small:,.2f}")
-    with col3:
-      st.metric(label="🟠 Grade: Mix", value=f"{stock_mix:,.2f}")
-    with col4:
-      st.metric(label="✨ Total On-Hand Stock", value=f"{total_on_hand:,.2f}")
+        st.info(f"📌 **WIP Lot:** {selected_wip_lot} | **Cultivar:** {cultivar_val} | **สต็อกคงเหลือปัจจุบัน:** {max_wip_qty:,.2f}")
 
-    st.divider()
+        with st.form("packing_form"):
+          st.subheader("รายละเอียดการแพ็กและของเสีย (Packing & Waste Input)")
+          
+          col1, col2 = st.columns(2)
+          with col1:
+            packed_fg_name = st.text_input("Packed Product / Export Name (ชื่อผลิตภัณฑ์หลังแพ็ก)")
+            packed_grade = st.selectbox("Grade ผลลัพธ์หลังแพ็ก", ["Big", "Small", "Mix", "Grade A", "Premium"])
+            packed_qty = st.number_input("จำนวนที่แพ็กได้สำเร็จ (Packed Qty)", min_value=0.0, max_value=max_wip_qty, step=0.1)
 
-    st.subheader("📑 รายละเอียดรายการสินค้าในคลัง (Active Stock)")
-    st.dataframe(filtered_df, use_container_width=True)
+          with col2:
+            waste_qty = st.number_input("จำนวนของเสีย/สูญเสีย (Waste Qty)", min_value=0.0, max_value=max_wip_qty, step=0.1)
+            note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
 
-    with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
-      st.dataframe(df, use_container_width=True)
+          pack_submitted = st.form_submit_button("🚀 ยืนยันการแพ็กและตัดสต็อก WIP")
 
-  else:
-    st.warning("ยังไม่มีข้อมูลใน Google Sheets สำหรับประมวลผลสต็อก")
+          if pack_submitted:
+            total_deduct = packed_qty + waste_qty
+            if total_deduct > max_wip_qty:
+              st.error("❌ จำนวนผลผลิตรวมกับของเสีย มากกว่ายอด WIP คงเหลือที่มีอยู่!")
+            else:
+              new_wip_qty = max_wip_qty - total_deduct
+              
+              # กำหนด Status ใหม่ตามเงื่อนไข
+              if new_wip_qty <= 0:
+                new_status = "Packing done"
+              else:
+                new_status = "Pending Packing"
+
+              # 1. อัปเดตตารางหลัก (Google Sheet แถวเดิม)
+              matched_idx = int(df[df["THAI STICK Lot. No."].astype(str) == selected_wip_lot].index[0]) + 2
+              
+              # ดึงข้อมูลแถวเดิมมาปรับค่า Quantity และ Status
+              row_values = sheet.row_values(matched_idx)
+              # สมมติลำดับ Quantity อยู่คอลัมน์ที่ 8 (index 7) และ Status อยู่คอลัมน์สุดท้าย (index 12)
+              row_values[7] = str(new_wip_qty)  # ปรับ Quantity ใหม่
+              row_values[12] = new_status       # ปรับ Status ใหม่
+
+              sheet.update(f"A{matched_idx}:M{matched_idx}", [row_values])
+
+              # 2. บันทึกประวัติลง Packing_Log
+              log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+              packing_sheet
