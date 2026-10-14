@@ -57,10 +57,10 @@ client = init_connection()
 SHEET_NAME = "Trading Data Log"
 sheet = client.open(SHEET_NAME).sheet1
 
-# --- 4. Sidebar เมนูด้านซ้าย ---
+# --- 4. Sidebar เมนูด้านซ้าย (เปลี่ยนเป็นแบบคลิกเลือกด้วย radio) ---
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
-menu = st.sidebar.selectbox(
+menu = st.sidebar.radio(
     "เลือกเมนูการใช้งาน",
     ["📝 Trading Registration", "📊 Overall Stock Dashboard"],
 )
@@ -161,7 +161,6 @@ elif menu == "📊 Overall Stock Dashboard":
       df["Clean_Qty"] = 0.0
 
     # เงื่อนไขกรอง On-hand stock: Status ไม่ใช่ 'Delivery' และ Type ไม่ใช่ 'Service'
-    # ป้องกันกรณีตัวอักษรพิมพ์เล็ก/ใหญ่ต่างกัน ใช้ .str.strip().str.lower() ช่วยเช็ก
     filtered_df = df.copy()
 
     if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
@@ -171,7 +170,6 @@ elif menu == "📊 Overall Stock Dashboard":
       ]
 
     # คำนวณยอดแยกตามเกรด (Big, Small, Mix)
-    # ตรวจสอบว่ามีคอลัมน์ Grade หรือไม่
     if "Grade" in filtered_df.columns:
       stock_big = filtered_df[
           filtered_df["Grade"].astype(str).str.strip().str.lower() == "big"
@@ -184,33 +182,4 @@ elif menu == "📊 Overall Stock Dashboard":
       ]["Clean_Qty"].sum()
       total_on_hand = filtered_df["Clean_Qty"].sum()
     else:
-      stock_big, stock_small, stock_mix, total_on_hand = 0, 0, 0, 0
-
-    # --- แสดงผล Cardboard (Metrics) สรุป On-hand stock ---
-    st.subheader("📦 On-hand Stock Summary (แยกตามเกรด)")
-    st.markdown(
-        "*เงื่อนไขการคำนวณ: ไม่รวมรายการที่มี Status เป็น 'Delivery' และ Type เป็น"
-        " 'Service'"
-    )
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-      st.metric(label="🟢 Grade: Big", value=f"{stock_big:,.2f}")
-    with col2:
-      st.metric(label="🔵 Grade: Small", value=f"{stock_small:,.2f}")
-    with col3:
-      st.metric(label="🟠 Grade: Mix", value=f"{stock_mix:,.2f}")
-    with col4:
-      st.metric(label="✨ Total On-Hand Stock", value=f"{total_on_hand:,.2f}")
-
-    st.divider()
-
-    # แสดงตารางข้อมูล On-hand Stock ที่ผ่านการกรองแล้ว
-    st.subheader("📑 รายละเอียดรายการสินค้าในคลัง (Active Stock)")
-    st.dataframe(filtered_df, use_container_width=True)
-
-    with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
-      st.dataframe(df, use_container_width=True)
-
-  else:
-    st.warning("ยังไม่มีข้อมูลใน Google Sheets สำหรับประมวลผลสต็อก")
+      stock_big, stock_
