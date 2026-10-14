@@ -635,12 +635,12 @@ elif menu == "📝 Trading Goods Registration":
     with col2:
       receive_date_str = str(
           st.date_input(
-              "8. Receive date (Column H)",
+              "8. Receive date",
               value=date.today(),
               key="reg_rec_dt",
           )
       )
-      quantity = st.number_input("9. Quantity", min_value=0.0, step=0.1)
+      quantity = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1)
       remark_qty = st.text_input(
           "Remark Qty (เช่น 5x1000)", placeholder="ระบุรายละเอียดจำนวนถุง/แพ็ก"
       )
@@ -696,7 +696,7 @@ elif menu == "📝 Trading Goods Registration":
       )
       packing_date_str = str(
           st.date_input(
-              "15. Packing date (Column O)",
+              "15. Packing date",
               value=date.today(),
               key="reg_pack_dt",
           )
@@ -860,7 +860,7 @@ elif menu == "✏️ Edit Registration":
             except:
               old_qty = 0.0
             e_qty = st.number_input(
-                "9. Quantity(g)", min_value=0.0, step=0.1, value=old_qty
+                "9. Quantity (g)", min_value=0.0, step=0.1, value=old_qty
             )
             e_remark_qty = st.text_input(
                 "Remark Qty",
@@ -1055,7 +1055,7 @@ elif menu == "📦 Packing Module":
                 value=max_wip_qty,
             )
             pack_date_input = st.date_input(
-                "Packing date (Column O)", value=date.today()
+                "Packing date", value=date.today()
             )
             packing_date_str = str(pack_date_input)
 
