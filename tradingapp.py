@@ -548,7 +548,6 @@ elif menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
   st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
 
-  # ใช้ Form พร้อมกำหนด clear_on_submit=True และเคลียร์ State ของ Checkbox
   with st.form("trading_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
@@ -601,12 +600,6 @@ elif menu == "📝 Trading Goods Registration":
           "Type": prod_type, "Status": status, "Packing date": "",
       }
       sheet.append_row([str(row_dict.get(h, "")) for h in latest_headers])
-      
-      # ล้างค่า State ของ Checkbox To be decided ทันทีหลังกดบันทึก
-      for k in ["reg_tbd_insp", "reg_tbd_ir", "reg_tbd_ship", "reg_tbd_type"]:
-        if k in st.session_state:
-          st.session_state[k] = False
-          
       st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
       st.rerun()
 
