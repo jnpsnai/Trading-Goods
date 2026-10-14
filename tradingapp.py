@@ -94,7 +94,7 @@ SHEET_NAME = "Trading Data Log"
 sh = client.open(SHEET_NAME)
 sheet = sh.get_worksheet(0)
 
-# กำหนดโครงสร้าง Column Header (เพิ่ม Remark Qty เข้าไปเรียบร้อย)
+# กำหนดโครงสร้าง Column Header
 EXPECTED_HEADERS = [
     "Cultivar Name",
     "Supplier Name",
@@ -612,7 +612,7 @@ elif menu == "📈 Monthly Report":
 
 
 # ==========================================
-# หน้าที่ 4: Trading Goods Registration (เพิ่มช่อง Remark Qty)
+# หน้าที่ 4: Trading Goods Registration (ปรับตำแหน่ง To be decided ไว้ด้านล่างข้อ 10-13)
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
@@ -635,7 +635,7 @@ elif menu == "📝 Trading Goods Registration":
     with col2:
       receive_date_str = str(
           st.date_input(
-              "8. Receive date",
+              "8. Receive date (Column H)",
               value=date.today(),
               key="reg_rec_dt",
           )
@@ -644,27 +644,50 @@ elif menu == "📝 Trading Goods Registration":
       remark_qty = st.text_input(
           "Remark Qty (เช่น 5x1000)", placeholder="ระบุรายละเอียดจำนวนถุง/แพ็ก"
       )
-      inspection_req = st.selectbox("10. Inspection Req.", ["Yes", "No"])
-      ir_req = st.selectbox("11. IR Req.", ["Yes", "No"])
-      is_tbd = st.checkbox("To be decided", key="reg_tbd")
-      shipment_date = (
-          "To be decided"
-          if is_tbd
-          else str(
-              st.date_input(
-                  "12. Shipment date", value=date.today(), key="reg_ship_dt"
-              )
-          )
+
+      # 10. Inspection Req. พร้อม To be decided ไว้ด้านล่าง
+      inspection_req_opt = ["Yes", "No", "To be decided"]
+      inspection_req_choice = st.selectbox(
+          "10. Inspection Req.", inspection_req_opt, key="reg_insp_choice"
       )
-      prod_type = st.selectbox(
-          "13. Type",
-          [
-              "Inspection & Packing Service",
-              "Trading Goods (TS)",
-              "Consignment",
-              "In House Product",
-          ],
+      inspection_req = inspection_req_choice
+
+      # 11. IR Req. พร้อม To be decided ไว้ด้านล่าง
+      ir_req_opt = ["Yes", "No", "To be decided"]
+      ir_req_choice = st.selectbox(
+          "11. IR Req.", ir_req_opt, key="reg_ir_choice"
       )
+      ir_req = ir_req_choice
+
+      # 12. Shipment date พร้อม To be decided ไว้ด้านล่าง
+      is_tbd_ship = st.checkbox(
+          "To be decided (Shipment date)", key="reg_tbd_ship"
+      )
+      if is_tbd_ship:
+        shipment_date = "To be decided"
+        st.date_input(
+            "12. Shipment date",
+            value=date.today(),
+            key="reg_ship_dt_disabled",
+            disabled=True,
+        )
+      else:
+        shipment_date = str(
+            st.date_input(
+                "12. Shipment date", value=date.today(), key="reg_ship_dt"
+            )
+        )
+
+      # 13. Type พร้อม To be decided ไว้ด้านล่าง
+      prod_type_opt = [
+          "Inspection & Packing Service",
+          "Trading Goods (TS)",
+          "Consignment",
+          "In House Product",
+          "To be decided",
+      ]
+      prod_type = st.selectbox("13. Type", prod_type_opt, key="reg_type_choice")
+
       status = st.selectbox(
           "14. Status",
           [
@@ -678,7 +701,7 @@ elif menu == "📝 Trading Goods Registration":
       )
       packing_date_str = str(
           st.date_input(
-              "15. Packing date",
+              "15. Packing date (Column O)",
               value=date.today(),
               key="reg_pack_dt",
           )
@@ -850,7 +873,7 @@ elif menu == "✏️ Edit Registration":
                 key="edit_remark_qty",
             )
 
-            insp_opt = ["Yes", "No"]
+            insp_opt = ["Yes", "No", "To be decided"]
             old_insp = str(current_data.get("Inspection Req.", "No"))
             e_insp = st.selectbox(
                 "10. Inspection Req.",
@@ -858,7 +881,7 @@ elif menu == "✏️ Edit Registration":
                 index=insp_opt.index(old_insp) if old_insp in insp_opt else 0,
             )
 
-            ir_opt = ["Yes", "No"]
+            ir_opt = ["Yes", "No", "To be decided"]
             old_ir = str(current_data.get("IR Req.", "No"))
             e_ir = st.selectbox(
                 "11. IR Req.",
@@ -878,7 +901,9 @@ elif menu == "✏️ Edit Registration":
                 default_dt = date.today()
 
             e_is_tbd = st.checkbox(
-                "To be decided", value=is_tbd_default, key="edit_tbd"
+                "To be decided (Shipment date)",
+                value=is_tbd_default,
+                key="edit_tbd",
             )
             e_date_input = st.date_input(
                 "12. Shipment date", value=default_dt, key="edit_date"
@@ -890,6 +915,7 @@ elif menu == "✏️ Edit Registration":
                 "Trading Goods (TS)",
                 "Consignment",
                 "In House Product",
+                "To be decided",
             ]
             old_type = str(current_data.get("Type", ""))
             e_type = st.selectbox(
