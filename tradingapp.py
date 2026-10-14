@@ -139,17 +139,18 @@ except:
       "Note",
   ])
 
-# --- 4. Sidebar เมนูด้านซ้าย ---
+# --- 4. Sidebar เมนูด้านซ้าย (จัดเรียง Delivery Issue และ Stock Summary ไว้บนสุดตามสั่ง) ---
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "เลือกเมนูการใช้งาน",
     [
+        "🚨 Delivery Issue",
+        "📊 Stock Summary & Details",
         "📝 Trading Goods Registration",
         "✏️ Edit Registration",
         "📦 Packing Module",
         "🚚 Shipped Out Module",
-        "📊 Overall Stock Dashboard",
     ],
 )
 st.sidebar.markdown("---")
@@ -165,9 +166,240 @@ def clean_quantity(val):
 
 
 # ==========================================
-# หน้าที่ 1: Trading Goods Registration
+# หน้าที่ 1: Delivery Issue (เมนูแรกสุด)
 # ==========================================
-if menu == "📝 Trading Goods Registration":
+if menu == "🚨 Delivery Issue":
+  st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
+  st.markdown(
+      "แสดงรายการสินค้าที่มีกำหนดส่ง (Shipment Date) เรียงจากใกล้ไปไกล"
+      " โดยรายการที่เป็น 'To be decided' จะถูกจัดไว้ท้ายสุด"
+  )
+
+  data_main = sheet.get_all_records()
+  df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
+  if not df_main.empty:
+    df_main.columns = [str(c).strip() for c in df_main.columns]
+    delivery_df = df_main.copy()
+    delivery_df["Clean_Qty"] = delivery_df["Quantity"].apply(clean_quantity)
+
+    if "Status" in delivery_df.columns:
+      delivery_df = delivery_df[
+          (
+              ~delivery_df["Status"]
+              .astype(str)
+              .str.strip()
+              .str.lower()
+              .eq("delivered")
+          )
+          & (delivery_df["Clean_Qty"] > 0)
+      ]
+
+    if not delivery_df.empty and "Shipment date" in delivery_df.columns:
+      delivery_df["Shipment date str"] = (
+          delivery_df["Shipment date"].astype(str).str.strip()
+      )
+      delivery_df["Is_TBD"] = (
+          delivery_df["Shipment date str"].str.lower() == "to be decided"
+      )
+      delivery_df = delivery_df.sort_values(
+          by=["Is_TBD", "Shipment date str"], ascending=[True, True]
+      )
+      display_delivery_df = delivery_df.drop(
+          columns=["Is_TBD", "Clean_Qty"], errors="ignore"
+      )
+
+      st.dataframe(display_delivery_df, use_container_width=True)
+    else:
+      st.info("ไม่พบรายการที่ต้องจัดส่งในขณะนี้")
+  else:
+    st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
+
+
+# ==========================================
+# หน้าที่ 2: Stock Summary & Details (เมนูที่สอง)
+# ==========================================
+elif menu == "📊 Stock Summary & Details":
+  st.title("📊 Stock Summary & Details")
+  st.markdown(
+      "ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) แบ่งตามประเภท WIP และ FG"
+  )
+
+  data_main = sheet.get_all_records()
+  df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
+  if not df_main.empty:
+    df_main.columns = [str(c).strip() for c in df_main.columns]
+
+  records_data = packing_records_sheet.get_all_records()
+  df_packing_fg = pd.DataFrame()
+  if records_data:
+    df_pack_raw = pd.DataFrame(records_data)
+    df_pack_raw.columns = [str(c).strip() for c in df_pack_raw.columns]
+    converted_rows = []
+    for _, row in df_pack_raw.iterrows():
+      converted_rows.append({
+          "Cultivar Name": row.get("Cultivar Name", ""),
+          "Supplier Name": "",
+          "Supplier Lot. No.": row.get("Source WIP Lot", ""),
+          "Export Name": row.get("Export Name", ""),
+          "THAI STICK Lot. No.": row.get("Generated FG Lot No.", ""),
+          "Category": "FG (Finished Goods)",
+          "Grade": row.get("Grade", ""),
+          "Receive date": row.get("Packing Date", ""),
+          "Quantity": clean_quantity(row.get("Quantity", 0)),
+          "Inspection Req.": "No",
+          "IR Req.": "No",
+          "Shipment date": "To be decided",
+          "Type": "In House Product",
+          "Status": "Trading Goods Received to Stock",
+          "Packing date": row.get("Packing Date", ""),
+      })
+    df_packing_fg = pd.DataFrame(converted_rows)
+
+  if not df_main.empty and not df_packing_fg.empty:
+    df = pd.concat([df_main, df_packing_fg], ignore_index=True)
+  elif not df_main.empty:
+    df = df_main
+  elif not df_packing_fg.empty:
+    df = df_packing_fg
+  else:
+    df = pd.DataFrame()
+
+  if not df.empty:
+    if "Quantity" in df.columns:
+      df["Clean_Qty"] = df["Quantity"].apply(clean_quantity)
+    else:
+      df["Clean_Qty"] = 0.0
+
+    filtered_df = df.copy()
+    filtered_df = filtered_df[
+        filtered_df["THAI STICK Lot. No."].astype(str).str.strip() != ""
+    ]
+
+    if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
+      filtered_df = filtered_df[
+          (
+              filtered_df["Status"]
+              .astype(str)
+              .str.strip()
+              .str.lower()
+              .ne("delivered")
+          )
+          & (
+              filtered_df["Type"]
+              .astype(str)
+              .str.strip()
+              .str.lower()
+              .ne("inspection & packing service")
+          )
+          & (filtered_df["Clean_Qty"] > 0)
+      ]
+
+    if "Category" in filtered_df.columns:
+      wip_stock_df = filtered_df[
+          filtered_df["Category"]
+          .astype(str)
+          .str.contains("WIP", case=False, na=False)
+      ]
+      fg_stock_df = filtered_df[
+          filtered_df["Category"]
+          .astype(str)
+          .str.contains("FG", case=False, na=False)
+      ]
+    else:
+      wip_stock_df = pd.DataFrame()
+      fg_stock_df = pd.DataFrame()
+
+    total_wip = wip_stock_df["Clean_Qty"].sum()
+    total_fg = fg_stock_df["Clean_Qty"].sum()
+    total_on_hand = total_wip + total_fg
+
+    st.subheader("📌 สรุปยอดรวมสต็อกในคลังทั้งหมด (Total Stock Summary)")
+    col_m1, col_m2, col_m3 = st.columns(3)
+    with col_m1:
+      st.metric(label="✨ ยอดรวมสต็อกทั้งหมด (Total Stock)", value=f"{total_on_hand:,.2f}")
+    with col_m2:
+      st.metric(label="🧪 ยอดรวมประเภท WIP", value=f"{total_wip:,.2f}")
+    with col_m3:
+      st.metric(label="📦 ยอดรวมประเภท FG", value=f"{total_fg:,.2f}")
+
+    st.divider()
+
+    st.subheader("🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
+    if not wip_stock_df.empty:
+      wip_big = wip_stock_df[
+          wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"
+      ]["Clean_Qty"].sum()
+      wip_small = wip_stock_df[
+          wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"
+      ]["Clean_Qty"].sum()
+      wip_mix = wip_stock_df[
+          wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
+      ]["Clean_Qty"].sum()
+      wip_f = wip_stock_df[
+          wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"
+      ]["Clean_Qty"].sum()
+
+      wc1, wc2, wc3, wc4, wc5 = st.columns(5)
+      with wc1:
+        st.metric(label="WIP: Big", value=f"{wip_big:,.2f}")
+      with wc2:
+        st.metric(label="WIP: Small", value=f"{wip_small:,.2f}")
+      with wc3:
+        st.metric(label="WIP: Mix", value=f"{wip_mix:,.2f}")
+      with wc4:
+        st.metric(label="WIP: F", value=f"{wip_f:,.2f}")
+      with wc5:
+        st.metric(label="WIP Total", value=f"{total_wip:,.2f}")
+
+      st.markdown("")
+      st.dataframe(wip_stock_df, use_container_width=True)
+    else:
+      st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
+
+    st.divider()
+
+    st.subheader("📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
+    if not fg_stock_df.empty:
+      fg_big = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"
+      ]["Clean_Qty"].sum()
+      fg_small = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"
+      ]["Clean_Qty"].sum()
+      fg_mix = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
+      ]["Clean_Qty"].sum()
+      fg_f = fg_stock_df[
+          fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"
+      ]["Clean_Qty"].sum()
+
+      fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+      with fc1:
+        st.metric(label="FG: Big", value=f"{fg_big:,.2f}")
+      with fc2:
+        st.metric(label="FG: Small", value=f"{fg_small:,.2f}")
+      with fc3:
+        st.metric(label="FG: Mix", value=f"{fg_mix:,.2f}")
+      with fc4:
+        st.metric(label="FG: F", value=f"{fg_f:,.2f}")
+      with fc5:
+        st.metric(label="FG Total", value=f"{total_fg:,.2f}")
+
+      st.markdown("")
+      st.dataframe(fg_stock_df, use_container_width=True)
+    else:
+      st.info("ไม่มีรายการสินค้า FG ในคลังขณะนี้")
+
+    with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
+      st.dataframe(df, use_container_width=True)
+  else:
+    st.warning("ยังไม่มีข้อมูลในระบบ Google Sheets สำหรับประมวลผลสต็อก")
+
+
+# ==========================================
+# หน้าที่ 3: Trading Goods Registration
+# ==========================================
+elif menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
   st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
 
@@ -260,7 +492,7 @@ if menu == "📝 Trading Goods Registration":
 
 
 # ==========================================
-# หน้าที่ 2: Edit Registration
+# หน้าที่ 4: Edit Registration
 # ==========================================
 elif menu == "✏️ Edit Registration":
   st.title("✏️ Edit Registration Data")
@@ -506,7 +738,7 @@ elif menu == "✏️ Edit Registration":
 
 
 # ==========================================
-# หน้าที่ 3: Packing Module
+# หน้าที่ 5: Packing Module
 # ==========================================
 elif menu == "📦 Packing Module":
   st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
@@ -759,7 +991,7 @@ elif menu == "📦 Packing Module":
 
 
 # ==========================================
-# หน้าที่ 4: Shipped Out Module (Unified Inventory Selection & Multi-Row)
+# หน้าที่ 6: Shipped Out Module
 # ==========================================
 elif menu == "🚚 Shipped Out Module":
   st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
@@ -1001,284 +1233,4 @@ elif menu == "🚚 Shipped Out Module":
             )
           else:
             all_pack_records = packing_records_sheet.get_all_records()
-            if row_idx_fg and (row_idx_fg - 2) < len(all_pack_records):
-              current_fg_qty = clean_quantity(
-                  all_pack_records[row_idx_fg - 2].get("Quantity", 0)
-              )
-              remaining_qty = max(0.0, current_fg_qty - qty)
-              packing_records_sheet.update_cell(row_idx_fg, 7, remaining_qty)
-
-          shipped_sheet.append_row([
-              log_time,
-              cat,
-              lot,
-              prod,
-              grade,
-              str(qty),
-              consignee,
-              client_name,
-              shipping_reason,
-              shipment_date_str,
-              note_ship,
-          ])
-          success_count += 1
-
-        st.success(
-            f"✅ บันทึกการส่งออกสำเร็จทั้งหมด {success_count}"
-            " รายการและหักสต็อกต้นทางเรียบร้อยแล้ว! 🎉"
-        )
-
-  st.divider()
-  st.subheader("📑 ประวัติการส่งสินค้าออก (Shipped Out Log)")
-  shipped_data = shipped_sheet.get_all_records()
-  if shipped_data:
-    st.dataframe(pd.DataFrame(shipped_data), use_container_width=True)
-  else:
-    st.info("ยังไม่มีประวัติการส่งสินค้าออกในระบบ")
-
-
-# ==========================================
-# หน้าที่ 5: Overall Stock Dashboard & Delivery Issue (แบ่งเป็น 2 Tab)
-# ==========================================
-elif menu == "📊 Overall Stock Dashboard":
-  st.title("📊 Overall Stock Dashboard & Delivery Planning")
-  st.markdown("ภาพรวมสต็อกสินค้าคงเหลือและรายการที่ต้องจัดส่ง (Delivery Issue)")
-
-  # สร้าง Tab ย่อย 2 Tab ตามที่คุณต้องการ
-  tab1, tab2 = st.tabs(
-      ["🚨 1. Delivery Issue (รายการที่ต้องส่ง)", "📊 2. Stock Summary & Details"]
-  )
-
-  # --- ดึงข้อมูลเตรียมไว้สำหรับทั้ง 2 Tab ---
-  data_main = sheet.get_all_records()
-  df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
-  if not df_main.empty:
-    df_main.columns = [str(c).strip() for c in df_main.columns]
-
-  records_data = packing_records_sheet.get_all_records()
-  df_packing_fg = pd.DataFrame()
-  if records_data:
-    df_pack_raw = pd.DataFrame(records_data)
-    df_pack_raw.columns = [str(c).strip() for c in df_pack_raw.columns]
-
-    converted_rows = []
-    for _, row in df_pack_raw.iterrows():
-      converted_rows.append({
-          "Cultivar Name": row.get("Cultivar Name", ""),
-          "Supplier Name": "",
-          "Supplier Lot. No.": row.get("Source WIP Lot", ""),
-          "Export Name": row.get("Export Name", ""),
-          "THAI STICK Lot. No.": row.get("Generated FG Lot No.", ""),
-          "Category": "FG (Finished Goods)",
-          "Grade": row.get("Grade", ""),
-          "Receive date": row.get("Packing Date", ""),
-          "Quantity": clean_quantity(row.get("Quantity", 0)),
-          "Inspection Req.": "No",
-          "IR Req.": "No",
-          "Shipment date": "To be decided",
-          "Type": "In House Product",
-          "Status": "Trading Goods Received to Stock",
-          "Packing date": row.get("Packing Date", ""),
-      })
-    df_packing_fg = pd.DataFrame(converted_rows)
-
-  # ==========================================
-  # Tab 1: Delivery Issue
-  # ==========================================
-  with tab1:
-    st.subheader("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
-    st.markdown(
-        "แสดงรายการสินค้าที่มีกำหนดส่ง (Shipment Date) เรียงจากใกล้ไปไกล"
-        " โดยรายการที่เป็น 'To be decided' จะถูกจัดไว้ท้ายสุด"
-    )
-
-    if not df_main.empty:
-      delivery_df = df_main.copy()
-      delivery_df["Clean_Qty"] = delivery_df["Quantity"].apply(clean_quantity)
-
-      # กรองเฉพาะรายการที่ยังไม่ถูกส่งมอบ (Status ไม่ใช่ Delivered และ Qty > 0)
-      if "Status" in delivery_df.columns:
-        delivery_df = delivery_df[
-            (
-                ~delivery_df["Status"]
-                .astype(str)
-                .str.strip()
-                .str.lower()
-                .eq("delivered")
-            )
-            & (delivery_df["Clean_Qty"] > 0)
-        ]
-
-      if not delivery_df.empty and "Shipment date" in delivery_df.columns:
-        # จัดเรียงลำดับ: แยก TBD ออกมาไว้ข้างหลัง
-        delivery_df["Shipment date str"] = (
-            delivery_df["Shipment date"].astype(str).str.strip()
-        )
-
-        # สร้าง Sort Key: ถ้าเป็น To be decided ให้เป็น 'Z' (อยู่หลังสุด) ไม่งั้นใช้วันที่ตรงๆ
-        delivery_df["Is_TBD"] = (
-            delivery_df["Shipment date str"].str.lower() == "to be decided"
-        )
-        delivery_df = delivery_df.sort_values(
-            by=["Is_TBD", "Shipment date str"], ascending=[True, True]
-        )
-
-        # Drop คอลัมน์ชั่วคราวที่ไม่จำเป็นออกก่อนแสดงผล
-        display_delivery_df = delivery_df.drop(
-            columns=["Is_TBD", "Clean_Qty"], errors="ignore"
-        )
-
-        st.dataframe(display_delivery_df, use_container_width=True)
-      else:
-        st.info("ไม่พบรายการที่ต้องจัดส่งในขณะนี้")
-    else:
-      st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
-
-  # ==========================================
-  # Tab 2: Stock Summary & Details
-  # ==========================================
-  with tab2:
-    if not df_main.empty and not df_packing_fg.empty:
-      df = pd.concat([df_main, df_packing_fg], ignore_index=True)
-    elif not df_main.empty:
-      df = df_main
-    elif not df_packing_fg.empty:
-      df = df_packing_fg
-    else:
-      df = pd.DataFrame()
-
-    if not df.empty:
-      if "Quantity" in df.columns:
-        df["Clean_Qty"] = df["Quantity"].apply(clean_quantity)
-      else:
-        df["Clean_Qty"] = 0.0
-
-      filtered_df = df.copy()
-      filtered_df = filtered_df[
-          filtered_df["THAI STICK Lot. No."].astype(str).str.strip() != ""
-      ]
-
-      if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
-        filtered_df = filtered_df[
-            (
-                filtered_df["Status"]
-                .astype(str)
-                .str.strip()
-                .str.lower()
-                .ne("delivered")
-            )
-            & (
-                filtered_df["Type"]
-                .astype(str)
-                .str.strip()
-                .str.lower()
-                .ne("inspection & packing service")
-            )
-            & (filtered_df["Clean_Qty"] > 0)
-        ]
-
-      if "Category" in filtered_df.columns:
-        wip_stock_df = filtered_df[
-            filtered_df["Category"]
-            .astype(str)
-            .str.contains("WIP", case=False, na=False)
-        ]
-        fg_stock_df = filtered_df[
-            filtered_df["Category"]
-            .astype(str)
-            .str.contains("FG", case=False, na=False)
-        ]
-      else:
-        wip_stock_df = pd.DataFrame()
-        fg_stock_df = pd.DataFrame()
-
-      total_wip = wip_stock_df["Clean_Qty"].sum()
-      total_fg = fg_stock_df["Clean_Qty"].sum()
-      total_on_hand = total_wip + total_fg
-
-      st.subheader("📌 สรุปยอดรวมสต็อกในคลังทั้งหมด (Total Stock Summary)")
-      col_m1, col_m2, col_m3 = st.columns(3)
-      with col_m1:
-        st.metric(
-            label="✨ ยอดรวมสต็อกทั้งหมด (Total Stock)",
-            value=f"{total_on_hand:,.2f}",
-        )
-      with col_m2:
-        st.metric(label="🧪 ยอดรวมประเภท WIP", value=f"{total_wip:,.2f}")
-      with col_m3:
-        st.metric(label="📦 ยอดรวมประเภท FG", value=f"{total_fg:,.2f}")
-
-      st.divider()
-
-      st.subheader("🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
-      if not wip_stock_df.empty:
-        wip_big = wip_stock_df[
-            wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"
-        ]["Clean_Qty"].sum()
-        wip_small = wip_stock_df[
-            wip_stock_df["Grade"].astype(str).str.strip().str.lower()
-            == "small"
-        ]["Clean_Qty"].sum()
-        wip_mix = wip_stock_df[
-            wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
-        ]["Clean_Qty"].sum()
-        wip_f = wip_stock_df[
-            wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"
-        ]["Clean_Qty"].sum()
-
-        wc1, wc2, wc3, wc4, wc5 = st.columns(5)
-        with wc1:
-          st.metric(label="WIP: Big", value=f"{wip_big:,.2f}")
-        with wc2:
-          st.metric(label="WIP: Small", value=f"{wip_small:,.2f}")
-        with wc3:
-          st.metric(label="WIP: Mix", value=f"{wip_mix:,.2f}")
-        with wc4:
-          st.metric(label="WIP: F", value=f"{wip_f:,.2f}")
-        with wc5:
-          st.metric(label="WIP Total", value=f"{total_wip:,.2f}")
-
-        st.markdown("")
-        st.dataframe(wip_stock_df, use_container_width=True)
-      else:
-        st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
-
-      st.divider()
-
-      st.subheader("📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
-      if not fg_stock_df.empty:
-        fg_big = fg_stock_df[
-            fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"
-        ]["Clean_Qty"].sum()
-        fg_small = fg_stock_df[
-            fg_stock_df["Grade"].astype(str).str.strip().str.lower()
-            == "small"
-        ]["Clean_Qty"].sum()
-        fg_mix = fg_stock_df[
-            fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"
-        ]["Clean_Qty"].sum()
-        fg_f = fg_stock_df[
-            fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"
-        ]["Clean_Qty"].sum()
-
-        fc1, fc2, fc3, fc4, fc5 = st.columns(5)
-        with fc1:
-          st.metric(label="FG: Big", value=f"{fg_big:,.2f}")
-        with fc2:
-          st.metric(label="FG: Small", value=f"{fg_small:,.2f}")
-        with fc3:
-          st.metric(label="FG: Mix", value=f"{fg_mix:,.2f}")
-        with fc4:
-          st.metric(label="FG: F", value=f"{fg_f:,.2f}")
-        with fc5:
-          st.metric(label="FG Total", value=f"{total_fg:,.2f}")
-
-        st.markdown("")
-        st.dataframe(fg_stock_df, use_container_width=True)
-      else:
-        st.info("ไม่มีรายการสินค้า FG ในคลังขณะนี้")
-
-      with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
-        st.dataframe(df, use_container_width=True)
-    else:
-      st.warning("ยังไม่มีข้อมูลในระบบ Google Sheets สำหรับประมวลผลสต็อก")
+            if row_idx_fg and
