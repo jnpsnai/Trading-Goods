@@ -713,7 +713,7 @@ elif menu == "📝 Trading Goods Registration":
           "Category": category,
           "Grade": grade,
           "Receive date": receive_date_str,
-          "Quantity (g)": str(quantity),
+          "Quantity": str(quantity),
           "Remark Qty": remark_qty,
           "Inspection Req.": inspection_req,
           "IR Req.": ir_req,
@@ -849,7 +849,7 @@ elif menu == "✏️ Edit Registration":
             except:
               default_rec_dt = date.today()
             e_rec_date_input = st.date_input(
-                "8. Receive date (Column H)",
+                "8. Receive date",
                 value=default_rec_dt,
                 key="edit_receive_date",
             )
@@ -860,7 +860,7 @@ elif menu == "✏️ Edit Registration":
             except:
               old_qty = 0.0
             e_qty = st.number_input(
-                "9. Quantity", min_value=0.0, step=0.1, value=old_qty
+                "9. Quantity(g)", min_value=0.0, step=0.1, value=old_qty
             )
             e_remark_qty = st.text_input(
                 "Remark Qty",
@@ -939,7 +939,7 @@ elif menu == "✏️ Edit Registration":
             except:
               default_pack_dt = date.today()
             e_pack_date_input = st.date_input(
-                "15. Packing date (Column O)",
+                "15. Packing date",
                 value=default_pack_dt,
                 key="edit_pack_date",
             )
