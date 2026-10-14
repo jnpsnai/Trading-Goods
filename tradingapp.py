@@ -233,11 +233,14 @@ if menu == "📝 Trading Goods Registration":
 
 
 # ==========================================
-# หน้าที่ 2: Edit Registration
+# หน้าที่ 2: Edit Registration (เพิ่มเงื่อนไข กรอง Qty=0 และ Status=Delivered ออก)
 # ==========================================
 elif menu == "✏️ Edit Registration":
   st.title("✏️ Edit Registration Data")
-  st.markdown("ค้นหาและแก้ไขข้อมูลล็อตสินค้าที่เคยบันทึกไว้")
+  st.markdown(
+      "ค้นหาและแก้ไขข้อมูลล็อตสินค้าที่เคยบันทึกไว้ (ไม่อนุญาตให้แก้ไขล็อตที่"
+      " Stock หมด หรือมี Status เป็น Delivered แล้ว)"
+  )
 
   data = sheet.get_all_records()
   if data:
@@ -249,193 +252,222 @@ elif menu == "✏️ Edit Registration":
         else df_all.columns[4]
     )
 
-    lot_list = df_all[lot_column].astype(str).tolist()
-    selected_lot = st.selectbox(
-        "🔍 เลือก THAI STICK Lot. No. ที่ต้องการแก้ไข", lot_list
+    # แปลง Quantity เป็นตัวเลขเพื่อใช้กรอง
+    df_all["Clean_Qty"] = (
+        df_all["Quantity"].apply(clean_quantity)
+        if "Quantity" in df_all.columns
+        else 0.0
     )
 
-    if selected_lot:
-      matched_row_idx = (
-          int(
-              df_all[df_all[lot_column].astype(str) == selected_lot].index[0]
+    # เงื่อนไขกรอง: Qty > 0 และ Status ต้องไม่ใช่ Delivered (ไม่สนตัวพิมพ์เล็กใหญ่)
+    if "Status" in df_all.columns:
+      editable_df = df_all[
+          (df_all["Clean_Qty"] > 0)
+          & (
+              ~df_all["Status"]
+              .astype(str)
+              .str.strip()
+              .str.lower()
+              .eq("delivered")
           )
-          + 2
+      ].copy()
+    else:
+      editable_df = df_all[df_all["Clean_Qty"] > 0].copy()
+
+    if editable_df.empty:
+      st.info(
+          "ℹ️ ไม่มีล็อตสินค้าที่สามารถแก้ไขได้ในขณะนี้ (สินค้าทั้งหมดอาจจะมี Stock"
+          " เป็น 0 หรือถูกส่งมอบ Delivered ไปหมดแล้ว)"
       )
-      current_data = df_all[df_all[lot_column].astype(str) == selected_lot].iloc[
-          0
-      ]
+    else:
+      lot_list = editable_df[lot_column].astype(str).tolist()
+      selected_lot = st.selectbox(
+          "🔍 เลือก THAI STICK Lot. No. ที่ต้องการแก้ไข", lot_list
+      )
 
-      st.info(f"กำลังแก้ไขข้อมูลของล็อต: **{selected_lot}**")
-
-      with st.form("edit_form"):
-        col1, col2 = st.columns(2)
-
-        with col1:
-          e_cultivar = st.text_input(
-              "1. Cultivar Name",
-              value=str(current_data.get("Cultivar Name", "")),
-          )
-          e_supplier = st.text_input(
-              "2. Supplier Name",
-              value=str(current_data.get("Supplier Name", "")),
-          )
-          e_supp_lot = st.text_input(
-              "3. Supplier Lot. No.",
-              value=str(current_data.get("Supplier Lot. No.", "")),
-          )
-          e_export = st.text_input(
-              "4. Export Name", value=str(current_data.get("Export Name", ""))
-          )
-          e_thai_lot = st.text_input(
-              "5. THAI STICK Lot. No.",
-              value=str(current_data.get("THAI STICK Lot. No.", "")),
-          )
-
-          cat_opt = ["FG (Finished Goods)", "WIP (Work in Progress)"]
-          old_cat = str(current_data.get("Category", "FG (Finished Goods)"))
-          e_category = st.selectbox(
-              "6. Category",
-              cat_opt,
-              index=cat_opt.index(old_cat) if old_cat in cat_opt else 0,
-          )
-
-          grades_opt = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
-          old_grade = str(current_data.get("Grade", "Big"))
-          e_grade = st.selectbox(
-              "7. Grade",
-              grades_opt,
-              index=grades_opt.index(old_grade)
-              if old_grade in grades_opt
-              else 0,
-          )
-
-        with col2:
-          try:
-            old_qty = float(current_data.get("Quantity", 0.0))
-          except:
-            old_qty = 0.0
-          e_qty = st.number_input(
-              "8. Quantity", min_value=0.0, step=0.1, value=old_qty
-          )
-
-          insp_opt = ["Yes", "No"]
-          old_insp = str(current_data.get("Inspection Req.", "No"))
-          e_insp = st.selectbox(
-              "9. Inspection Req.",
-              insp_opt,
-              index=insp_opt.index(old_insp) if old_insp in insp_opt else 0,
-          )
-
-          ir_opt = ["Yes", "No"]
-          old_ir = str(current_data.get("IR Req.", "No"))
-          e_ir = st.selectbox(
-              "10. IR Req.",
-              ir_opt,
-              index=ir_opt.index(old_ir) if old_ir in ir_opt else 0,
-          )
-
-          old_date = str(current_data.get("Shipment date", ""))
-          is_tbd_default = old_date == "To be decided"
-
-          if is_tbd_default:
-            default_dt = date.today()
-          else:
-            try:
-              default_dt = datetime.strptime(old_date, "%Y-%m-%d").date()
-            except:
-              default_dt = date.today()
-
-          e_is_tbd = st.checkbox(
-              "To be decided", value=is_tbd_default, key="edit_tbd"
-          )
-          e_date_input = st.date_input(
-              "11. Shipment date", value=default_dt, key="edit_date"
-          )
-          e_shipment_date = "To be decided" if e_is_tbd else str(e_date_input)
-
-          types_opt = [
-              "Inspection & Packing Service",
-              "Trading Goods (TS)",
-              "Consignment",
-              "In House Product",
-          ]
-          old_type = str(current_data.get("Type", ""))
-          e_type = st.selectbox(
-              "12. Type",
-              types_opt,
-              index=types_opt.index(old_type) if old_type in types_opt else 0,
-          )
-
-          status_opt = [
-              "Trading Goods Received to Stock",
-              "Inspection Completed",
-              "Pending Packing",
-              "Packing done",
-              "Delivered",
-              "Waiting for Return",
-          ]
-          old_status = str(current_data.get("Status", ""))
-          e_status = st.selectbox(
-              "13. Status",
-              status_opt,
-              index=status_opt.index(old_status)
-              if old_status in status_opt
-              else 0,
-          )
-
-          old_pack_date = str(current_data.get("Packing date", ""))
-          try:
-            default_pack_dt = datetime.strptime(
-                old_pack_date, "%Y-%m-%d"
-            ).date()
-          except:
-            default_pack_dt = date.today()
-          e_pack_date_input = st.date_input(
-              "14. Packing date (Column O)",
-              value=default_pack_dt,
-              key="edit_pack_date",
-          )
-          e_packing_date_str = str(e_pack_date_input)
-
-        st.markdown("")
-        update_submitted = st.form_submit_button(
-            "🔄 อัปเดตข้อมูล (Update Google Sheets)"
+      if selected_lot:
+        # หา Index จริงจากตารางหลักทั้งหมด
+        matched_row_idx = (
+            int(
+                df_all[df_all[lot_column].astype(str) == selected_lot].index[0]
+            )
+            + 2
         )
+        current_data = df_all[
+            df_all[lot_column].astype(str) == selected_lot
+        ].iloc[0]
 
-        if update_submitted:
-          latest_headers = sheet.row_values(1)
-          updated_dict = {
-              "Cultivar Name": e_cultivar,
-              "Supplier Name": e_supplier,
-              "Supplier Lot. No.": e_supp_lot,
-              "Export Name": e_export,
-              "THAI STICK Lot. No.": e_thai_lot,
-              "Category": e_category,
-              "Grade": e_grade,
-              "Quantity": str(e_qty),
-              "Inspection Req.": e_insp,
-              "IR Req.": e_ir,
-              "Shipment date": e_shipment_date,
-              "Type": e_type,
-              "Status": e_status,
-              "Packing date": e_packing_date_str,
-          }
-          updated_row_data = [
-              str(updated_dict.get(h, "")) for h in latest_headers
-          ]
+        st.info(f"กำลังแก้ไขข้อมูลของล็อต: **{selected_lot}**")
 
-          col_end_letter = chr(64 + len(latest_headers)).upper()
-          sheet.update(
-              f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}",
-              [updated_row_data],
+        with st.form("edit_form"):
+          col1, col2 = st.columns(2)
+
+          with col1:
+            e_cultivar = st.text_input(
+                "1. Cultivar Name",
+                value=str(current_data.get("Cultivar Name", "")),
+            )
+            e_supplier = st.text_input(
+                "2. Supplier Name",
+                value=str(current_data.get("Supplier Name", "")),
+            )
+            e_supp_lot = st.text_input(
+                "3. Supplier Lot. No.",
+                value=str(current_data.get("Supplier Lot. No.", "")),
+            )
+            e_export = st.text_input(
+                "4. Export Name", value=str(current_data.get("Export Name", ""))
+            )
+            e_thai_lot = st.text_input(
+                "5. THAI STICK Lot. No.",
+                value=str(current_data.get("THAI STICK Lot. No.", "")),
+            )
+
+            cat_opt = ["FG (Finished Goods)", "WIP (Work in Progress)"]
+            old_cat = str(current_data.get("Category", "FG (Finished Goods)"))
+            e_category = st.selectbox(
+                "6. Category",
+                cat_opt,
+                index=cat_opt.index(old_cat) if old_cat in cat_opt else 0,
+            )
+
+            grades_opt = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
+            old_grade = str(current_data.get("Grade", "Big"))
+            e_grade = st.selectbox(
+                "7. Grade",
+                grades_opt,
+                index=grades_opt.index(old_grade)
+                if old_grade in grades_opt
+                else 0,
+            )
+
+          with col2:
+            try:
+              old_qty = float(current_data.get("Quantity", 0.0))
+            except:
+              old_qty = 0.0
+            e_qty = st.number_input(
+                "8. Quantity", min_value=0.0, step=0.1, value=old_qty
+            )
+
+            insp_opt = ["Yes", "No"]
+            old_insp = str(current_data.get("Inspection Req.", "No"))
+            e_insp = st.selectbox(
+                "9. Inspection Req.",
+                insp_opt,
+                index=insp_opt.index(old_insp) if old_insp in insp_opt else 0,
+            )
+
+            ir_opt = ["Yes", "No"]
+            old_ir = str(current_data.get("IR Req.", "No"))
+            e_ir = st.selectbox(
+                "10. IR Req.",
+                ir_opt,
+                index=ir_opt.index(old_ir) if old_ir in ir_opt else 0,
+            )
+
+            old_date = str(current_data.get("Shipment date", ""))
+            is_tbd_default = old_date == "To be decided"
+
+            if is_tbd_default:
+              default_dt = date.today()
+            else:
+              try:
+                default_dt = datetime.strptime(old_date, "%Y-%m-%d").date()
+              except:
+                default_dt = date.today()
+
+            e_is_tbd = st.checkbox(
+                "To be decided", value=is_tbd_default, key="edit_tbd"
+            )
+            e_date_input = st.date_input(
+                "11. Shipment date", value=default_dt, key="edit_date"
+            )
+            e_shipment_date = "To be decided" if e_is_tbd else str(e_date_input)
+
+            types_opt = [
+                "Inspection & Packing Service",
+                "Trading Goods (TS)",
+                "Consignment",
+                "In House Product",
+            ]
+            old_type = str(current_data.get("Type", ""))
+            e_type = st.selectbox(
+                "12. Type",
+                types_opt,
+                index=types_opt.index(old_type) if old_type in types_opt else 0,
+            )
+
+            status_opt = [
+                "Trading Goods Received to Stock",
+                "Inspection Completed",
+                "Pending Packing",
+                "Packing done",
+                "Delivered",
+                "Waiting for Return",
+            ]
+            old_status = str(current_data.get("Status", ""))
+            e_status = st.selectbox(
+                "13. Status",
+                status_opt,
+                index=status_opt.index(old_status)
+                if old_status in status_opt
+                else 0,
+            )
+
+            old_pack_date = str(current_data.get("Packing date", ""))
+            try:
+              default_pack_dt = datetime.strptime(
+                  old_pack_date, "%Y-%m-%d"
+              ).date()
+            except:
+              default_pack_dt = date.today()
+            e_pack_date_input = st.date_input(
+                "14. Packing date (Column O)",
+                value=default_pack_dt,
+                key="edit_pack_date",
+            )
+            e_packing_date_str = str(e_pack_date_input)
+
+          st.markdown("")
+          update_submitted = st.form_submit_button(
+              "🔄 อัปเดตข้อมูล (Update Google Sheets)"
           )
-          st.success(f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉")
+
+          if update_submitted:
+            latest_headers = sheet.row_values(1)
+            updated_dict = {
+                "Cultivar Name": e_cultivar,
+                "Supplier Name": e_supplier,
+                "Supplier Lot. No.": e_supp_lot,
+                "Export Name": e_export,
+                "THAI STICK Lot. No.": e_thai_lot,
+                "Category": e_category,
+                "Grade": e_grade,
+                "Quantity": str(e_qty),
+                "Inspection Req.": e_insp,
+                "IR Req.": e_ir,
+                "Shipment date": e_shipment_date,
+                "Type": e_type,
+                "Status": e_status,
+                "Packing date": e_packing_date_str,
+            }
+            updated_row_data = [
+                str(updated_dict.get(h, "")) for h in latest_headers
+            ]
+
+            col_end_letter = chr(64 + len(latest_headers)).upper()
+            sheet.update(
+                f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}",
+                [updated_row_data],
+            )
+            st.success(f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉")
   else:
     st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
 
 
 # ==========================================
-# หน้าที่ 3: Packing Module (บันทึกลง Sheet แยก: Packing_Records)
+# หน้าที่ 3: Packing Module
 # ==========================================
 elif menu == "📦 Packing Module":
   st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
