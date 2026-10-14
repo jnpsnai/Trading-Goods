@@ -94,6 +94,7 @@ SHEET_NAME = "Trading Data Log"
 sh = client.open(SHEET_NAME)
 sheet = sh.get_worksheet(0)
 
+# กำหนดโครงสร้าง Column Header (เพิ่ม Remark Qty เข้าไปเรียบร้อย)
 EXPECTED_HEADERS = [
     "Cultivar Name",
     "Supplier Name",
@@ -104,6 +105,7 @@ EXPECTED_HEADERS = [
     "Grade",
     "Receive date",
     "Quantity",
+    "Remark Qty",
     "Inspection Req.",
     "IR Req.",
     "Shipment date",
@@ -114,7 +116,7 @@ EXPECTED_HEADERS = [
 
 current_headers = sheet.row_values(1)
 if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
-  sheet.update("A1:O1", [EXPECTED_HEADERS])
+  sheet.update("A1:P1", [EXPECTED_HEADERS])
 
 try:
   packing_records_sheet = sh.worksheet("Packing_Records")
@@ -275,6 +277,7 @@ elif menu == "📊 Stock Summary & Details":
           "Grade": row.get("Grade", ""),
           "Receive date": row.get("Packing Date", ""),
           "Quantity": clean_quantity(row.get("Quantity", 0)),
+          "Remark Qty": "",
           "Inspection Req.": "No",
           "IR Req.": "No",
           "Shipment date": "To be decided",
@@ -609,7 +612,7 @@ elif menu == "📈 Monthly Report":
 
 
 # ==========================================
-# หน้าที่ 4: Trading Goods Registration
+# หน้าที่ 4: Trading Goods Registration (เพิ่มช่อง Remark Qty)
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
@@ -638,6 +641,9 @@ elif menu == "📝 Trading Goods Registration":
           )
       )
       quantity = st.number_input("9. Quantity", min_value=0.0, step=0.1)
+      remark_qty = st.text_input(
+          "Remark Qty (เช่น 5x1000)", placeholder="ระบุรายละเอียดจำนวนถุง/แพ็ก"
+      )
       inspection_req = st.selectbox("10. Inspection Req.", ["Yes", "No"])
       ir_req = st.selectbox("11. IR Req.", ["Yes", "No"])
       is_tbd = st.checkbox("To be decided", key="reg_tbd")
@@ -690,6 +696,7 @@ elif menu == "📝 Trading Goods Registration":
           "Grade": grade,
           "Receive date": receive_date_str,
           "Quantity": str(quantity),
+          "Remark Qty": remark_qty,
           "Inspection Req.": inspection_req,
           "IR Req.": ir_req,
           "Shipment date": shipment_date,
@@ -837,6 +844,11 @@ elif menu == "✏️ Edit Registration":
             e_qty = st.number_input(
                 "9. Quantity", min_value=0.0, step=0.1, value=old_qty
             )
+            e_remark_qty = st.text_input(
+                "Remark Qty",
+                value=str(current_data.get("Remark Qty", "")),
+                key="edit_remark_qty",
+            )
 
             insp_opt = ["Yes", "No"]
             old_insp = str(current_data.get("Inspection Req.", "No"))
@@ -934,6 +946,7 @@ elif menu == "✏️ Edit Registration":
                 "Grade": e_grade,
                 "Receive date": e_receive_date_str,
                 "Quantity": str(e_qty),
+                "Remark Qty": e_remark_qty,
                 "Inspection Req.": e_insp,
                 "IR Req.": e_ir,
                 "Shipment date": e_shipment_date,
