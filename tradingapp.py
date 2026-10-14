@@ -40,7 +40,7 @@ st.markdown(
 )
 
 
-# --- 3. ฟังก์ชันเชื่อมต่อ Google Sheets ---
+# --- 3. ฟังก์ชันเชื่อมต่อ Google Sheets และตรวจสอบ Header อัตโนมัติ ---
 @st.cache_resource
 def init_connection():
   scope = [
@@ -56,10 +56,32 @@ def init_connection():
 client = init_connection()
 SHEET_NAME = "Trading Data Log"
 
-# ตรวจสอบและสร้าง Sheet ย่อยสำหรับบันทึกประวัติการ Pack (ถ้ายังไม่มี)
 sh = client.open(SHEET_NAME)
 sheet = sh.get_worksheet(0)  # แผ่นหลักสำหรับ Registration
 
+# กำหนดโครงสร้าง Column Header ที่ต้องการ
+EXPECTED_HEADERS = [
+    "Cultivar Name",
+    "Supplier Name",
+    "Supplier Lot. No.",
+    "Export Name",
+    "THAI STICK Lot. No.",
+    "Category",
+    "Grade",
+    "Quantity",
+    "Inspection Req.",
+    "IR Req.",
+    "Shipment date",
+    "Type",
+    "Status",
+]
+
+# ตรวจสอบและซิงค์ Header ให้ตรงกันอัตโนมัติ
+current_headers = sheet.row_values(1)
+if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
+  sheet.update("A1:M1", [EXPECTED_HEADERS])
+
+# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Log
 try:
   packing_sheet = sh.worksheet("Packing_Log")
 except:
@@ -100,7 +122,7 @@ def clean_quantity(val):
 
 
 # ==========================================
-# หน้าที่ 1: Trading Goods Registration (เพิ่ม Category: WIP / FG)
+# หน้าที่ 1: Trading Goods Registration
 # ==========================================
 if menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
@@ -154,6 +176,7 @@ if menu == "📝 Trading Goods Registration":
     submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
 
     if submitted:
+      # ใช้ gspread_dataframe หรือ append ผ่าน dict/list ตามลำดับ Expected Headers เป๊ะๆ
       row_data = [
           cultivar_name,
           supplier_name,
@@ -338,240 +361,10 @@ elif menu == "✏️ Edit Registration":
         )
 
         if update_submitted:
-          updated_row_data = [
-              e_cultivar,
-              e_supplier,
-              e_supp_lot,
-              e_export,
-              e_thai_lot,
-              e_category,
-              e_grade,
-              str(e_qty),
-              e_insp,
-              e_ir,
-              e_shipment_date,
-              e_type,
-              e_status,
-          ]
-          sheet.update(f"A{matched_row_idx}:M{matched_row_idx}", [updated_row_data])
-          st.success(f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉")
-  else:
-    st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
-
-
-# ==========================================
-# หน้าที่ 3: Packing Module
-# ==========================================
-elif menu == "📦 Packing Module":
-  st.title("📦 Packing Module (WIP Conversion & Waste Logging)")
-  st.markdown(
-      "ดึงวัตถุดิบ WIP จากการ Register มาทำการแพ็ก บันทึกยอดผลิตภัณฑ์ที่ได้"
-      " พร้อมตัดสต็อกอัตโนมัติ"
-  )
-
-  data = sheet.get_all_records()
-  if data:
-    df = pd.DataFrame(data)
-
-    if "Category" in df.columns:
-      wip_df = df[
-          df["Category"]
-          .astype(str)
-          .str.contains("WIP", case=False, na=False)
-      ].copy()
-    else:
-      wip_df = pd.DataFrame()
-
-    if not wip_df.empty:
-      wip_df["Clean_Qty"] = wip_df["Quantity"].apply(clean_quantity)
-      available_wip = wip_df[wip_df["Clean_Qty"] > 0]
-
-      if not available_wip.empty:
-        wip_lot_list = available_wip["THAI STICK Lot. No."].astype(str).tolist()
-
-        selected_wip_lot = st.selectbox(
-            "🔍 เลือก WIP Lot ที่ต้องการนำมาแพ็ก", wip_lot_list
-        )
-
-        selected_row = available_wip[
-            available_wip["THAI STICK Lot. No."].astype(str)
-            == selected_wip_lot
-        ].iloc[0]
-        max_wip_qty = float(selected_row["Clean_Qty"])
-        cultivar_val = selected_row.get("Cultivar Name", "")
-
-        st.info(
-            f"📌 **WIP Lot:** {selected_wip_lot} | **Cultivar:**"
-            f" {cultivar_val} | **สต็อกคงเหลือปัจจุบัน:**"
-            f" {max_wip_qty:,.2f}"
-        )
-
-        with st.form("packing_form"):
-          st.subheader("รายละเอียดการแพ็กและของเสีย (Packing & Waste Input)")
-
-          col1, col2 = st.columns(2)
-          with col1:
-            packed_fg_name = st.text_input(
-                "Packed Product / Export Name (ชื่อผลิตภัณฑ์หลังแพ็ก)"
-            )
-            packed_grade = st.selectbox(
-                "Grade ผลลัพธ์หลังแพ็ก",
-                ["Big", "Small", "Mix", "Grade A", "Premium"],
-            )
-            packed_qty = st.number_input(
-                "จำนวนที่แพ็กได้สำเร็จ (Packed Qty)",
-                min_value=0.0,
-                max_value=max_wip_qty,
-                step=0.1,
-            )
-
-          with col2:
-            waste_qty = st.number_input(
-                "จำนวนของเสีย/สูญเสีย (Waste Qty)",
-                min_value=0.0,
-                max_value=max_wip_qty,
-                step=0.1,
-            )
-            note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
-
-          pack_submitted = st.form_submit_button(
-              "🚀 ยืนยันการแพ็กและตัดสต็อก WIP"
-          )
-
-          if pack_submitted:
-            total_deduct = packed_qty + waste_qty
-            if total_deduct > max_wip_qty:
-              st.error(
-                  "❌ จำนวนผลผลิตรวมกับของเสีย มากกว่ายอด WIP คงเหลือที่มีอยู่!"
-              )
-            else:
-              new_wip_qty = max_wip_qty - total_deduct
-
-              if new_wip_qty <= 0:
-                new_status = "Packing done"
-              else:
-                new_status = "Pending Packing"
-
-              matched_idx = (
-                  int(
-                      df[
-                          df["THAI STICK Lot. No."].astype(str)
-                          == selected_wip_lot
-                      ].index[0]
-                  )
-                  + 2
-              )
-
-              row_values = sheet.row_values(matched_idx)
-              row_values[7] = str(new_wip_qty)
-              row_values[12] = new_status
-
-              sheet.update(f"A{matched_idx}:M{matched_idx}", [row_values])
-
-              log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-              packing_sheet.append_row([
-                  log_time,
-                  selected_wip_lot,
-                  cultivar_val,
-                  packed_fg_name,
-                  packed_grade,
-                  str(packed_qty),
-                  str(waste_qty),
-                  note,
-              ])
-
-              st.success(
-                  f"✅ บันทึกการแพ็กสำเร็จ! หักยอด WIP คงเหลือเหลือ"
-                  f" {new_wip_qty:,.2f} สถานะปรับเป็น '{new_status}' เรียบร้อยแล้ว"
-              )
-      else:
-        st.warning(
-            "⚠️ ไม่มี WIP Lot ที่มีสต็อกคงเหลือ (Quantity > 0) ให้แพ็กในขณะนี้"
-        )
-    else:
-      st.warning(
-          "⚠️ ไม่พบคอลัมน์ Category ในระบบ กรุณาตรวจสอบข้อมูลใน Google Sheets"
-      )
-
-    st.divider()
-    st.subheader("📜 ประวัติการ Packing ทั้งหมด (Packing Log)")
-    log_data = packing_sheet.get_all_records()
-    if log_data:
-      st.dataframe(pd.DataFrame(log_data), use_container_width=True)
-    else:
-      st.info("ยังไม่มีประวัติการแพ็กสินค้า")
-  else:
-    st.warning("ยังไม่มีข้อมูลในระบบ Google Sheets")
-
-
-# ==========================================
-# หน้าที่ 4: Overall Stock Dashboard
-# ==========================================
-elif menu == "📊 Overall Stock Dashboard":
-  st.title("📊 Overall Stock Dashboard")
-  st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock)")
-
-  data = sheet.get_all_records()
-
-  if data:
-    df = pd.DataFrame(data)
-
-    if "Quantity" in df.columns:
-      df["Clean_Qty"] = df["Quantity"].apply(clean_quantity)
-    else:
-      df["Clean_Qty"] = 0.0
-
-    filtered_df = df.copy()
-
-    if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
-      filtered_df = filtered_df[
-          (
-              filtered_df["Status"]
-              .astype(str)
-              .str.strip()
-              .str.lower()
-              .ne("delivered")
-          )
-          & (
-              filtered_df["Type"]
-              .astype(str)
-              .str.strip()
-              .str.lower()
-              .ne("inspection & packing service")
-          )
-      ]
-
-    if "Grade" in filtered_df.columns:
-      stock_big = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "big"
-      ]["Clean_Qty"].sum()
-      stock_small = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "small"
-      ]["Clean_Qty"].sum()
-      stock_mix = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "mix"
-      ]["Clean_Qty"].sum()
-      total_on_hand = filtered_df["Clean_Qty"].sum()
-    else:
-      stock_big, stock_small, stock_mix, total_on_hand = 0, 0, 0, 0
-
-    st.subheader("📦 On-hand Stock Summary (แยกตามเกรด)")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-      st.metric(label="🟢 Grade: Big", value=f"{stock_big:,.2f}")
-    with col2:
-      st.metric(label="🔵 Grade: Small", value=f"{stock_small:,.2f}")
-    with col3:
-      st.metric(label="🟠 Grade: Mix", value=f"{stock_mix:,.2f}")
-    with col4:
-      st.metric(label="✨ Total On-Hand Stock", value=f"{total_on_hand:,.2f}")
-
-    st.divider()
-
-    st.subheader("📑 รายละเอียดรายการสินค้าในคลัง (Active Stock)")
-    st.dataframe(filtered_df, use_container_width=True)
-
-    with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
-      st.dataframe(df, use_container_width=True)
-  else:
-    st.warning("ยังไม่มีข้อมูลใน Google Sheets สำหรับประมวลผลสต็อก")
+          # ใช้ Header ล่าสุดจาก Google Sheet มาเป็นตัวจัดเรียงข้อมูลแบบไดนามิก (ป้องกันสลับคอลัมน์)
+          latest_headers = sheet.row_values(1)
+          updated_dict = {
+              "Cultivar Name": e_cultivar,
+              "Supplier Name": e_supplier,
+              "Supplier Lot. No.": e_supp_lot,
+              "Export Name": e_export
