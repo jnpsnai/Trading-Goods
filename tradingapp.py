@@ -426,6 +426,4 @@ elif menu == "📦 Packing Module":
             "🔍 เลือก WIP Lot ที่ต้องการนำมาเบิกแพ็ก", wip_lot_list
         )
 
-        selected_row = available_wip[
-            available_wip["THAI STICK Lot. No."].astype(str)
-            == selected_
+        selected_row = selected_row = available_wip[available_wip["THAI STICK Lot. No."].astype(str) == selected_wip_lot].iloc[0]
