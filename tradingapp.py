@@ -216,6 +216,7 @@ elif menu == "✏️ Edit Registration":
   data = sheet.get_all_records()
   if data:
     df_all = pd.DataFrame(data)
+    df_all.columns = [str(c).strip() for c in df_all.columns]
     lot_column = (
         "THAI STICK Lot. No."
         if "THAI STICK Lot. No." in df_all.columns
@@ -319,111 +320,4 @@ elif menu == "✏️ Edit Registration":
               default_dt = date.today()
 
           e_is_tbd = st.checkbox(
-              "To be decided", value=is_tbd_default, key="edit_tbd"
-          )
-          e_date_input = st.date_input(
-              "10. Shipment date", value=default_dt, key="edit_date"
-          )
-          e_shipment_date = "To be decided" if e_is_tbd else str(e_date_input)
-
-          types_opt = [
-              "Inspection & Packing Service",
-              "Trading Goods (TS)",
-              "Consignment",
-              "In House Product",
-          ]
-          old_type = str(current_data.get("Type", ""))
-          e_type = st.selectbox(
-              "11. Type",
-              types_opt,
-              index=types_opt.index(old_type) if old_type in types_opt else 0,
-          )
-
-          status_opt = [
-              "Trading Goods Received to Stock",
-              "Inspection Completed",
-              "Pending Packing",
-              "Packing done",
-              "Delivered",
-              "Waiting for Return",
-          ]
-          old_status = str(current_data.get("Status", ""))
-          e_status = st.selectbox(
-              "12. Status",
-              status_opt,
-              index=status_opt.index(old_status)
-              if old_status in status_opt
-              else 0,
-          )
-
-        st.markdown("")
-        update_submitted = st.form_submit_button(
-            "🔄 อัปเดตข้อมูล (Update Google Sheets)"
-        )
-
-        if update_submitted:
-          latest_headers = sheet.row_values(1)
-          updated_dict = {
-              "Cultivar Name": e_cultivar,
-              "Supplier Name": e_supplier,
-              "Supplier Lot. No.": e_supp_lot,
-              "Export Name": e_export,
-              "THAI STICK Lot. No.": e_thai_lot,
-              "Category": e_category,
-              "Grade": e_grade,
-              "Quantity": str(e_qty),
-              "Inspection Req.": e_insp,
-              "IR Req.": e_ir,
-              "Shipment date": e_shipment_date,
-              "Type": e_type,
-              "Status": e_status,
-          }
-          updated_row_data = [
-              str(updated_dict.get(h, "")) for h in latest_headers
-          ]
-
-          col_end_letter = chr(64 + len(latest_headers)).upper()
-          sheet.update(
-              f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}",
-              [updated_row_data],
-          )
-          st.success(f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉")
-  else:
-    st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
-
-
-# ==========================================
-# หน้าที่ 3: Packing Module (ปรับปรุงใหม่ตามสั่ง)
-# ==========================================
-elif menu == "📦 Packing Module":
-  st.title("📦 Packing Module (WIP Conversion & Waste Logging)")
-  st.markdown(
-      "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก ระบุจำนวนที่เบิก และบันทึกผลผลิตตามเกรด"
-      " (Big, Small, Mix, F) พร้อมตัดสต็อกอัตโนมัติ"
-  )
-
-  data = sheet.get_all_records()
-  if data:
-    df = pd.DataFrame(data)
-
-    if "Category" in df.columns:
-      wip_df = df[
-          df["Category"]
-          .astype(str)
-          .str.contains("WIP", case=False, na=False)
-      ].copy()
-    else:
-      wip_df = pd.DataFrame()
-
-    if not wip_df.empty:
-      wip_df["Clean_Qty"] = wip_df["Quantity"].apply(clean_quantity)
-      available_wip = wip_df[wip_df["Clean_Qty"] > 0]
-
-      if not available_wip.empty:
-        wip_lot_list = available_wip["THAI STICK Lot. No."].astype(str).tolist()
-
-        selected_wip_lot = st.selectbox(
-            "🔍 เลือก WIP Lot ที่ต้องการนำมาเบิกแพ็ก", wip_lot_list
-        )
-
-        selected_row = selected_row = available_wip[available_wip["THAI STICK Lot. No."].astype(str) == selected_wip_lot].iloc[0]
+              "To be decided", value=is_tbd_default, key="edit_
