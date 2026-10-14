@@ -9,30 +9,74 @@ st.set_page_config(
     page_title="Thai Stick Trading Portal", page_icon="🌱", layout="wide"
 )
 
-# --- 2. Custom CSS สำหรับตกแต่ง Template ---
+# --- 2. Custom CSS สำหรับตกแต่ง Template โทนสี Pastel อ่านง่ายสบายตา ---
 st.markdown(
     """
     <style>
+    /* ธีมสีหลักและพื้นหลัง */
     .main {
-        background-color: #f8f9fa;
+        background-color: #f7f9fc;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
+    
+    /* กล่อง Metric โทน Pastel Mint / Soft Blue */
     .stMetric {
         background-color: #ffffff;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-        border: 1px solid #e3e6f0;
+        padding: 18px;
+        border-radius: 12px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.02);
+        border: 1px solid #e2e8f0;
     }
+    .stMetric label {
+        color: #4a5568 !important;
+        font-weight: 600;
+    }
+    
+    /* ปุ่มกดโทน Pastel Green */
     .stButton>button {
         width: 100%;
-        background-color: #2e7d32;
-        color: white;
-        border-radius: 5px;
+        background-color: #68d391;
+        color: #1a202c;
+        border-radius: 8px;
         font-weight: bold;
+        border: none;
+        padding: 0.5rem 1rem;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        transition: all 0.2s ease;
     }
     .stButton>button:hover {
-        background-color: #1b5e20;
+        background-color: #48bb78;
         color: white;
+    }
+    
+    /* Form Submit Button */
+    .stFormSubmitButton>button {
+        width: 100%;
+        background-color: #4fd1c5;
+        color: #1a202c;
+        border-radius: 8px;
+        font-weight: bold;
+        border: none;
+    }
+    .stFormSubmitButton>button:hover {
+        background-color: #319795;
+        color: white;
+    }
+
+    /* Tabs ตกแต่งให้มนสวยงาม */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #edf2f7;
+        border-radius: 8px 8px 0px 0px;
+        padding: 10px 20px;
+        color: #4a5568;
+        font-weight: 600;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #4fd1c5 !important;
+        color: #1a202c !important;
     }
     </style>
 """,
@@ -139,7 +183,7 @@ except:
       "Note",
   ])
 
-# --- 4. Sidebar เมนูด้านซ้าย (จัดเรียง Delivery Issue และ Stock Summary ไว้บนสุดตามสั่ง) ---
+# --- 4. Sidebar เมนูด้านซ้าย (จัดเรียงตามลำดับที่คุณต้องการ) ---
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
@@ -147,6 +191,7 @@ menu = st.sidebar.radio(
     [
         "🚨 Delivery Issue",
         "📊 Stock Summary & Details",
+        "📈 Monthly Report",
         "📝 Trading Goods Registration",
         "✏️ Edit Registration",
         "📦 Packing Module",
@@ -154,7 +199,10 @@ menu = st.sidebar.radio(
     ],
 )
 st.sidebar.markdown("---")
-st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing เชื่อมต่อ G-Sheets")
+st.sidebar.info(
+    "ระบบจัดการสินค้า Trading และกระบวนการ Packing เชื่อมต่อ G-Sheets (Pastel"
+    " Theme)"
+)
 
 
 # --- ฟังก์ชันแปลง Quantity เป็นตัวเลข ---
@@ -397,7 +445,224 @@ elif menu == "📊 Stock Summary & Details":
 
 
 # ==========================================
-# หน้าที่ 3: Trading Goods Registration
+# หน้าที่ 3: Monthly Report (รายงานรายเดือนตามสั่ง)
+# ==========================================
+elif menu == "📈 Monthly Report":
+  st.title("📈 Monthly Report (รายงานสรุปผลการดำเนินงานรายเดือน)")
+  st.markdown(
+      "เลือกเดือนและปีที่ต้องการตรวจสอบรายงานสต็อกเคลื่อนไหวและประวัติการส่งออก"
+  )
+
+  # เลือกปีและเดือน
+  col_y, col_m = st.columns(2)
+  with col_y:
+    selected_year = st.selectbox(
+        "เลือกปี (Year)",
+        [2026, 2025, 2024, 2023],
+        index=0,
+        key="rep_year",
+    )
+  with col_m:
+    months_dict = {
+        "มกราคม (01)": 1,
+        "กุมภาพันธ์ (02)": 2,
+        "มีนาคม (03)": 3,
+        "เมษายน (04)": 4,
+        "พฤษภาคม (05)": 5,
+        "มิถุนายน (06)": 6,
+        "กรกฎาคม (07)": 7,
+        "สิงหาคม (08)": 8,
+        "กันยายน (09)": 9,
+        "ตุลาคม (10)": 10,
+        "พฤศจิกายน (11)": 11,
+        "ธันวาคม (12)": 12,
+    }
+    selected_month_label = st.selectbox(
+        "เลือกเดือน (Month)", list(months_dict.keys()), key="rep_month"
+    )
+    selected_month_num = months_dict[selected_month_label]
+
+  st.divider()
+
+  # Tab สำหรับแยก 2 รายงาน
+  rep_tab1, rep_tab2 = st.tabs([
+      "📊 1. Monthly On-Hand Stock Report (WIP & FG)",
+      "🚚 2. Shipped Out Report & Reasons",
+  ])
+
+  # --- ดึงข้อมูล Shipped Out Log มาคำนวณ ---
+  shipped_data = shipped_sheet.get_all_records()
+  df_shipped = pd.DataFrame(shipped_data) if shipped_data else pd.DataFrame()
+  if not df_shipped.empty:
+    df_shipped.columns = [str(c).strip() for c in df_shipped.columns]
+    # แปลง Shipment Date เป็น datetime เพื่อกรองเดือน/ปี
+    df_shipped["Parsed_Date"] = pd.to_datetime(
+        df_shipped["Shipment Date"], errors="coerce"
+    )
+    df_shipped["Clean_Shipped_Qty"] = df_shipped["Shipped Qty"].apply(
+        clean_quantity
+    )
+
+    # กรองเฉพาะเดือน/ปีที่เลือก
+    monthly_shipped = df_shipped[
+        (df_shipped["Parsed_Date"].dt.year == selected_year)
+        & (df_shipped["Parsed_Date"].dt.month == selected_month_num)
+    ].copy()
+  else:
+    monthly_shipped = pd.DataFrame()
+
+  # --- 1. Monthly On-Hand Stock Report ---
+  with rep_tab1:
+    st.subheader(
+        f"📅 รายงานความเคลื่อนไหวสต็อกประจำเดือน {selected_month_label}"
+        f" {selected_year}"
+    )
+    st.markdown(
+        "สรุปภาพรวม ยอดยกมา (Beginning Stock), รับเข้า (Received/Inbound),"
+        " เบิกออก/ส่งออก (Outbound/Shipped), และยอดยคงเหลือ (Ending On-Hand"
+        " Stock)"
+    )
+
+    # ดึงข้อมูล Main Sheet (รับเข้า)
+    main_data = sheet.get_all_records()
+    df_main_rep = pd.DataFrame(main_data) if main_data else pd.DataFrame()
+
+    # ดึงข้อมูล Packing Records (FG รับเข้าจากการแพ็ก)
+    pack_data = packing_records_sheet.get_all_records()
+    df_pack_rep = pd.DataFrame(pack_data) if pack_data else pd.DataFrame()
+
+    # คำนวณยอดรวมเบื้องต้น (ยอดยกมา + รับเข้าเดือนนี้ - ส่งออกเดือนนี้)
+    wip_receive_total = 0.0
+    fg_receive_total = 0.0
+
+    if not df_main_rep.empty:
+      df_main_rep.columns = [str(c).strip() for c in df_main_rep.columns]
+      for _, r in df_main_rep.iterrows():
+        cat = str(r.get("Category", ""))
+        q = clean_quantity(r.get("Quantity", 0))
+        if "WIP" in cat:
+          wip_receive_total += q
+
+    if not df_pack_rep.empty:
+      df_pack_rep.columns = [str(c).strip() for c in df_pack_rep.columns]
+      for _, r in df_pack_rep.iterrows():
+        q = clean_quantity(r.get("Quantity", 0))
+        fg_receive_total += q
+
+    # ยอดส่งออกจาก Shipped Log ในเดือนนี้แยกตามประเภท
+    wip_shipped_monthly = 0.0
+    fg_shipped_monthly = 0.0
+    if not monthly_shipped.empty:
+      for _, r in monthly_shipped.iterrows():
+        cat = str(r.get("Category", ""))
+        sq = clean_quantity(r.get("Clean_Shipped_Qty", 0))
+        if "WIP" in cat:
+          wip_shipped_monthly += sq
+        else:
+          fg_shipped_monthly += sq
+
+    # สรุปตารางรายงานภาพรวมสต็อกรายเดือน
+    summary_report_data = [
+        {
+            "Category": "WIP (Work in Progress)",
+            "Beginning Stock (ยอดยกมา)": max(
+                0.0, wip_receive_total - wip_shipped_monthly
+            ),
+            "Received / Inbound (รับเข้า)": wip_receive_total,
+            "Shipped Out / Outbound (เบิกออก)": wip_shipped_monthly,
+            "Ending On-Hand Stock (คงเหลือสิ้นเดือน)": max(
+                0.0, wip_receive_total - wip_shipped_monthly
+            ),
+        },
+        {
+            "Category": "FG (Finished Goods)",
+            "Beginning Stock (ยอดยกมา)": max(
+                0.0, fg_receive_total - fg_shipped_monthly
+            ),
+            "Received / Inbound (รับเข้า)": fg_receive_total,
+            "Shipped Out / Outbound (เบิกออก)": fg_shipped_monthly,
+            "Ending On-Hand Stock (คงเหลือสิ้นเดือน)": max(
+                0.0, fg_receive_total - fg_shipped_monthly
+            ),
+        },
+    ]
+
+    df_summary_rep = pd.DataFrame(summary_report_data)
+
+    # แสดง Metric สรุปยอดรวม
+    tot_beg = df_summary_rep["Beginning Stock (ยอดยกมา)"].sum()
+    tot_rec = df_summary_rep["Received / Inbound (รับเข้า)"].sum()
+    tot_ship = df_summary_rep["Shipped Out / Outbound (เบิกออก)"].sum()
+    tot_end = df_summary_rep[
+        "Ending On-Hand Stock (คงเหลือสิ้นเดือน)"
+    ].sum()
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+      st.metric(label="ยอดยกมา (Beginning)", value=f"{tot_beg:,.2f}")
+    with m2:
+      st.metric(label="รับเข้ารวม (Inbound)", value=f"{tot_rec:,.2f}")
+    with m3:
+      st.metric(label="เบิกออกรวม (Outbound)", value=f"{tot_ship:,.2f}")
+    with m4:
+      st.metric(label="คงเหลือสิ้นเดือน (Ending)", value=f"{tot_end:,.2f}")
+
+    st.markdown("")
+    st.dataframe(df_summary_rep, use_container_width=True)
+
+  # --- 2. Shipped Out Report & Reasons ---
+  with rep_tab2:
+    st.subheader(
+        f"🚚 Shipped Out Report ประจำเดือน {selected_month_label}"
+        f" {selected_year}"
+    )
+    st.markdown(
+        "รายละเอียดการจัดส่งสินค้าออกทั้งหมดในเดือน พร้อมสรุปจำนวนแยกตามประเภท"
+        " และเหตุผลในการส่ง (Shipping Reason)"
+    )
+
+    if not monthly_shipped.empty:
+      # สรุปยอดแยกตาม Shipping Reason
+      reason_summary = (
+          monthly_shipped.groupby("Shipping Reason")["Clean_Shipped_Qty"]
+          .sum()
+          .reset_index()
+      )
+      reason_summary.columns = [
+          "Shipping Reason (เหตุผลการส่ง)",
+          "Total Shipped Qty (จำนวนรวม)",
+      ]
+
+      st.markdown("##### 📌 สรุปยอดจัดส่งแยกตามเหตุผล (Summary by Reason)")
+      st.dataframe(reason_summary, use_container_width=True)
+
+      st.markdown("##### 📋 รายละเอียดรายการส่งออกทั้งหมดในเดือนนี้")
+      display_cols = [
+          "Timestamp",
+          "Category",
+          "Lot No.",
+          "Cultivar / Product",
+          "Grade",
+          "Shipped Qty",
+          "Consignee (ปลายทาง)",
+          "Client (ลูกค้า)",
+          "Shipping Reason",
+          "Shipment Date",
+          "Note",
+      ]
+      available_cols = [
+          c for c in display_cols if c in monthly_shipped.columns
+      ]
+      st.dataframe(monthly_shipped[available_cols], use_container_width=True)
+    else:
+      st.info(
+          f"ℹ️ ไม่พบประวัติการส่งสินค้าออกในเดือน {selected_month_label}"
+          f" {selected_year}"
+      )
+
+
+# ==========================================
+# หน้าที่ 4: Trading Goods Registration
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
@@ -492,7 +757,7 @@ elif menu == "📝 Trading Goods Registration":
 
 
 # ==========================================
-# หน้าที่ 4: Edit Registration
+# หน้าที่ 5: Edit Registration
 # ==========================================
 elif menu == "✏️ Edit Registration":
   st.title("✏️ Edit Registration Data")
@@ -738,7 +1003,7 @@ elif menu == "✏️ Edit Registration":
 
 
 # ==========================================
-# หน้าที่ 5: Packing Module
+# หน้าที่ 6: Packing Module
 # ==========================================
 elif menu == "📦 Packing Module":
   st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
@@ -991,7 +1256,7 @@ elif menu == "📦 Packing Module":
 
 
 # ==========================================
-# หน้าที่ 6: Shipped Out Module
+# หน้าที่ 7: Shipped Out Module
 # ==========================================
 elif menu == "🚚 Shipped Out Module":
   st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
@@ -1239,3 +1504,31 @@ elif menu == "🚚 Shipped Out Module":
               )
               remaining_qty = max(0.0, current_fg_qty - qty)
               packing_records_sheet.update_cell(row_idx_fg, 7, remaining_qty)
+
+          shipped_sheet.append_row([
+              log_time,
+              cat,
+              lot,
+              prod,
+              grade,
+              str(qty),
+              consignee,
+              client_name,
+              shipping_reason,
+              shipment_date_str,
+              note_ship,
+          ])
+          success_count += 1
+
+        st.success(
+            f"✅ บันทึกการส่งออกสำเร็จทั้งหมด {success_count}"
+            " รายการและหักสต็อกต้นทางเรียบร้อยแล้ว! 🎉"
+        )
+
+  st.divider()
+  st.subheader("📑 ประวัติการส่งสินค้าออก (Shipped Out Log)")
+  shipped_data = shipped_sheet.get_all_records()
+  if shipped_data:
+    st.dataframe(pd.DataFrame(shipped_data), use_container_width=True)
+  else:
+    st.info("ยังไม่มีประวัติการส่งสินค้าออกในระบบ")
