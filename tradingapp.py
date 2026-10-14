@@ -59,7 +59,7 @@ SHEET_NAME = "Trading Data Log"
 sh = client.open(SHEET_NAME)
 sheet = sh.get_worksheet(0)  # แผ่นหลักสำหรับ Registration
 
-# กำหนดโครงสร้าง Column Header ที่ต้องการ
+# กำหนดโครงสร้าง Column Header ที่ต้องการ (ให้ "Packing date" อยู่ท้ายสุดตรงกับ Column O)
 EXPECTED_HEADERS = [
     "Cultivar Name",
     "Supplier Name",
@@ -74,12 +74,13 @@ EXPECTED_HEADERS = [
     "Shipment date",
     "Type",
     "Status",
+    "Packing date",
 ]
 
 # ตรวจสอบและซิงค์ Header ให้ตรงกันอัตโนมัติ
 current_headers = sheet.row_values(1)
 if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
-  sheet.update("A1:M1", [EXPECTED_HEADERS])
+  sheet.update("A1:N1", [EXPECTED_HEADERS])
 
 # ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Log
 try:
@@ -94,6 +95,7 @@ except:
       "Grade & Qty Breakdown",
       "Total Packed Qty",
       "Waste Qty",
+      "Packing Date",
       "Note",
   ])
 
@@ -137,20 +139,18 @@ if menu == "📝 Trading Goods Registration":
       supplier_lot = st.text_input("3. Supplier Lot. No.")
       export_name = st.text_input("4. Export Name")
       thai_stick_lot = st.text_input("5. THAI STICK Lot. No.")
-
       category = st.selectbox(
-          "Category", ["FG (Finished Goods)", "WIP (Work in Progress)"]
+          "6. Category", ["FG (Finished Goods)", "WIP (Work in Progress)"]
       )
-
       grades_opt = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
-      grade = st.selectbox("6. Grade", grades_opt)
+      grade = st.selectbox("7. Grade", grades_opt)
 
     with col2:
-      quantity = st.number_input("7. Quantity", min_value=0.0, step=0.1)
-      inspection_req = st.selectbox("8. Inspection Req.", ["Yes", "No"])
-      ir_req = st.selectbox("9. IR Req.", ["Yes", "No"])
+      quantity = st.number_input("8. Quantity", min_value=0.0, step=0.1)
+      inspection_req = st.selectbox("9. Inspection Req.", ["Yes", "No"])
+      ir_req = st.selectbox("10. IR Req.", ["Yes", "No"])
 
-      date_val = st.date_input("10. Shipment date", value=date.today())
+      date_val = st.date_input("11. Shipment date", value=date.today())
       is_tbd = st.checkbox("To be decided")
       shipment_date = "To be decided" if is_tbd else str(date_val)
 
@@ -160,7 +160,7 @@ if menu == "📝 Trading Goods Registration":
           "Consignment",
           "In House Product",
       ]
-      prod_type = st.selectbox("11. Type", types_opt)
+      prod_type = st.selectbox("12. Type", types_opt)
 
       status_opt = [
           "Trading Goods Received to Stock",
@@ -170,7 +170,12 @@ if menu == "📝 Trading Goods Registration":
           "Delivered",
           "Waiting for Return",
       ]
-      status = st.selectbox("12. Status", status_opt)
+      status = st.selectbox("13. Status", status_opt)
+
+      pack_date_val = st.date_input(
+          "14. Packing date (Column O)", value=date.today(), key="reg_pack_date"
+      )
+      packing_date_str = str(pack_date_val)
 
     st.markdown("")
     submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
@@ -191,6 +196,7 @@ if menu == "📝 Trading Goods Registration":
           "Shipment date": shipment_date,
           "Type": prod_type,
           "Status": status,
+          "Packing date": packing_date_str,
       }
       row_data = [str(row_dict.get(h, "")) for h in latest_headers]
       sheet.append_row(row_data)
@@ -268,7 +274,7 @@ elif menu == "✏️ Edit Registration":
           cat_opt = ["FG (Finished Goods)", "WIP (Work in Progress)"]
           old_cat = str(current_data.get("Category", "FG (Finished Goods)"))
           e_category = st.selectbox(
-              "Category",
+              "6. Category",
               cat_opt,
               index=cat_opt.index(old_cat) if old_cat in cat_opt else 0,
           )
@@ -276,7 +282,7 @@ elif menu == "✏️ Edit Registration":
           grades_opt = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
           old_grade = str(current_data.get("Grade", "Big"))
           e_grade = st.selectbox(
-              "6. Grade",
+              "7. Grade",
               grades_opt,
               index=grades_opt.index(old_grade)
               if old_grade in grades_opt
@@ -289,13 +295,13 @@ elif menu == "✏️ Edit Registration":
           except:
             old_qty = 0.0
           e_qty = st.number_input(
-              "7. Quantity", min_value=0.0, step=0.1, value=old_qty
+              "8. Quantity", min_value=0.0, step=0.1, value=old_qty
           )
 
           insp_opt = ["Yes", "No"]
           old_insp = str(current_data.get("Inspection Req.", "No"))
           e_insp = st.selectbox(
-              "8. Inspection Req.",
+              "9. Inspection Req.",
               insp_opt,
               index=insp_opt.index(old_insp) if old_insp in insp_opt else 0,
           )
@@ -303,7 +309,7 @@ elif menu == "✏️ Edit Registration":
           ir_opt = ["Yes", "No"]
           old_ir = str(current_data.get("IR Req.", "No"))
           e_ir = st.selectbox(
-              "9. IR Req.",
+              "10. IR Req.",
               ir_opt,
               index=ir_opt.index(old_ir) if old_ir in ir_opt else 0,
           )
@@ -323,7 +329,7 @@ elif menu == "✏️ Edit Registration":
               "To be decided", value=is_tbd_default, key="edit_tbd"
           )
           e_date_input = st.date_input(
-              "10. Shipment date", value=default_dt, key="edit_date"
+              "11. Shipment date", value=default_dt, key="edit_date"
           )
           e_shipment_date = "To be decided" if e_is_tbd else str(e_date_input)
 
@@ -335,7 +341,7 @@ elif menu == "✏️ Edit Registration":
           ]
           old_type = str(current_data.get("Type", ""))
           e_type = st.selectbox(
-              "11. Type",
+              "12. Type",
               types_opt,
               index=types_opt.index(old_type) if old_type in types_opt else 0,
           )
@@ -350,12 +356,26 @@ elif menu == "✏️ Edit Registration":
           ]
           old_status = str(current_data.get("Status", ""))
           e_status = st.selectbox(
-              "12. Status",
+              "13. Status",
               status_opt,
               index=status_opt.index(old_status)
               if old_status in status_opt
               else 0,
           )
+
+          old_pack_date = str(current_data.get("Packing date", ""))
+          try:
+            default_pack_dt = datetime.strptime(
+                old_pack_date, "%Y-%m-%d"
+            ).date()
+          except:
+            default_pack_dt = date.today()
+          e_pack_date_input = st.date_input(
+              "14. Packing date (Column O)",
+              value=default_pack_dt,
+              key="edit_pack_date",
+          )
+          e_packing_date_str = str(e_pack_date_input)
 
         st.markdown("")
         update_submitted = st.form_submit_button(
@@ -378,6 +398,7 @@ elif menu == "✏️ Edit Registration":
               "Shipment date": e_shipment_date,
               "Type": e_type,
               "Status": e_status,
+              "Packing date": e_packing_date_str,
           }
           updated_row_data = [
               str(updated_dict.get(h, "")) for h in latest_headers
@@ -394,13 +415,13 @@ elif menu == "✏️ Edit Registration":
 
 
 # ==========================================
-# หน้าที่ 3: Packing Module (บันทึก FG แยกบรรทัดอิสระตามเกรด)
+# หน้าที่ 3: Packing Module
 # ==========================================
 elif menu == "📦 Packing Module":
   st.title("📦 Packing Module (WIP Conversion & Waste Logging)")
   st.markdown(
-      "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก ระบุจำนวนที่เบิก และบันทึกผลผลิตตามเกรด"
-      " (แยกบรรทัดอิสระสำหรับแต่ละเกรด พร้อมตัดสต็อก WIP อัตโนมัติ)"
+      "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก ระบุ Packing date (ลง Column O)"
+      " และบันทึกผลผลิตตามเกรด (แยกบรรทัดอิสระสำหรับแต่ละเกรด)"
   )
 
   data = sheet.get_all_records()
@@ -453,14 +474,21 @@ elif menu == "📦 Packing Module":
         )
 
         with st.form("packing_form"):
-          st.subheader("1. ข้อมูลการเบิกวัตถุดิบ (WIP Withdrawal)")
-          withdraw_qty = st.number_input(
-              "จำนวนที่ต้องการเบิกมาแพ็กในรอบนี้ (Withdraw Qty)",
-              min_value=0.0,
-              max_value=max_wip_qty,
-              step=0.1,
-              value=max_wip_qty,
-          )
+          st.subheader("1. ข้อมูลการเบิกวัตถุดิบและวันที่แพ็ก")
+          col_p1, col_p2 = st.columns(2)
+          with col_p1:
+            withdraw_qty = st.number_input(
+                "จำนวนที่ต้องการเบิกมาแพ็กในรอบนี้ (Withdraw Qty)",
+                min_value=0.0,
+                max_value=max_wip_qty,
+                step=0.1,
+                value=max_wip_qty,
+            )
+          with col_p2:
+            pack_date_input = st.date_input(
+                "Packing date (Column O)", value=date.today()
+            )
+            packing_date_str = str(pack_date_input)
 
           st.divider()
           st.subheader(
@@ -581,10 +609,11 @@ elif menu == "📦 Packing Module":
                 breakdown_str,
                 str(total_packed_output),
                 str(waste_qty),
+                packing_date_str,
                 note,
             ])
 
-            # 3. เพิ่มรายการ FG ลงใน Sheet หลัก (Registration) แยกทีละบรรทัดสำหรับแต่ละเกรดที่มียอด > 0
+            # 3. เพิ่มรายการ FG ลงใน Sheet หลัก (Registration) แยกทีละบรรทัด พร้อมลง Packing Date ที่ Column O
             fg_items = [
                 (g1_type, g1_qty),
                 (g2_type, g2_qty),
@@ -614,6 +643,7 @@ elif menu == "📦 Packing Module":
                     "Shipment date": "To be decided",
                     "Type": "In House Product",
                     "Status": "Trading Goods Received to Stock",
+                    "Packing date": packing_date_str,
                 }
                 new_fg_row_data = [
                     str(new_fg_dict.get(h, "")) for h in latest_headers
@@ -623,7 +653,8 @@ elif menu == "📦 Packing Module":
             st.success(
                 f"✅ บันทึกการแพ็กสำเร็จ! หัก WIP เหลือ"
                 f" {remaining_wip_in_stock:,.2f} และสร้างรายการ FG"
-                f" แยกตามเกรดลงในระบบจำนวน {created_count} บรรทัดเรียบร้อยแล้ว! 🎉"
+                f" แยกตามเกรดลง Column O (Packing date) จำนวน {created_count}"
+                " บรรทัดเรียบร้อยแล้ว! 🎉"
             )
 
     st.divider()
@@ -722,4 +753,4 @@ elif menu == "📊 Overall Stock Dashboard":
     with st.expander("🔍 ดูข้อมูลดิบทั้งหมด (Raw Data ทั้งหมดในระบบ)"):
       st.dataframe(df, use_container_width=True)
   else:
-    st.warning("ยังไม่มีข้อมูลใน Google Sheets สำหรับประมวลผลสต็อก")
+    st.warning("ยังไม่มีข้อมูลในระบบ Google Sheets สำหรับประมวลผลสต็อก")
