@@ -713,7 +713,7 @@ elif menu == "📝 Trading Goods Registration":
           "Category": category,
           "Grade": grade,
           "Receive date": receive_date_str,
-          "Quantity": str(quantity),
+          "Quantity (g)": str(quantity),
           "Remark Qty": remark_qty,
           "Inspection Req.": inspection_req,
           "IR Req.": ir_req,
