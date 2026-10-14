@@ -219,7 +219,6 @@ if menu == "🚨 Delivery Issue":
     delivery_df = df_main.copy()
     delivery_df["Clean_Qty"] = delivery_df["Quantity"].apply(clean_quantity)
 
-    # กรองเฉพาะงานที่ยังไม่ Delivered และมี Qty > 0
     if "Status" in delivery_df.columns:
       delivery_df = delivery_df[
           (~delivery_df["Status"].astype(str).str.strip().str.lower().eq("delivered"))
@@ -549,6 +548,7 @@ elif menu == "📝 Trading Goods Registration":
   st.title("📝 Trading Goods Registration")
   st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
 
+  # ใช้ Form พร้อมกำหนด clear_on_submit=True และเคลียร์ State ของ Checkbox
   with st.form("trading_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
@@ -590,7 +590,8 @@ elif menu == "📝 Trading Goods Registration":
           ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"],
       )
       
-    if st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets"):
+    submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
+    if submitted:
       latest_headers = sheet.row_values(1)
       row_dict = {
           "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
@@ -600,7 +601,14 @@ elif menu == "📝 Trading Goods Registration":
           "Type": prod_type, "Status": status, "Packing date": "",
       }
       sheet.append_row([str(row_dict.get(h, "")) for h in latest_headers])
+      
+      # ล้างค่า State ของ Checkbox To be decided ทันทีหลังกดบันทึก
+      for k in ["reg_tbd_insp", "reg_tbd_ir", "reg_tbd_ship", "reg_tbd_type"]:
+        if k in st.session_state:
+          st.session_state[k] = False
+          
       st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
+      st.rerun()
 
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
