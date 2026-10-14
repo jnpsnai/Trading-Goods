@@ -759,7 +759,7 @@ elif menu == "📦 Packing Module":
 
 
 # ==========================================
-# หน้าที่ 4: Shipped Out Module (แก้ไขการดึงข้อมูล WIP/FG แยกส่วนถูกต้อง 100%)
+# หน้าที่ 4: Shipped Out Module (แก้ปัญหาแยกประเภท WIP/FG และเอาลิมิต 0 ออก)
 # ==========================================
 elif menu == "🚚 Shipped Out Module":
   st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
@@ -921,7 +921,6 @@ elif menu == "🚚 Shipped Out Module":
             "ประเภท",
             ["FG (Finished Goods)", "WIP (Work in Progress)"],
             key=f"cat_{i}",
-            label_visibility="collapsed",
         )
       with row_c2:
         if "FG" in item_cat:
@@ -929,7 +928,6 @@ elif menu == "🚚 Shipped Out Module":
               "เลือก FG Lot",
               ["-- เลือก Lot FG (Lot | ชื่อ | เกรด | คงเหลือ) --"] + fg_options,
               key=f"lot_fg_{i}",
-              label_visibility="collapsed",
           )
           chosen_lot = (
               fg_display_map.get(chosen_display, "")
@@ -941,7 +939,6 @@ elif menu == "🚚 Shipped Out Module":
               "เลือก WIP Lot",
               ["-- เลือก Lot WIP (Lot | ชื่อ | เกรด | คงเหลือ) --"] + wip_options,
               key=f"lot_wip_{i}",
-              label_visibility="collapsed",
           )
           chosen_lot = (
               wip_display_map.get(chosen_display, "")
@@ -957,39 +954,49 @@ elif menu == "🚚 Shipped Out Module":
           elif "WIP" in item_cat and chosen_lot in wip_dict:
             max_q = wip_dict[chosen_lot]["max_qty"]
 
+        # ตั้งค่า min_value=0.0 แต่เอา default ออกหรือให้ไม่บังคับติด 0 หากยังไม่เลือก Lot
         ship_q = st.number_input(
-            f"จำนวน (Max: {max_q:,.1f})",
+            f"จำนวนส่งออก (Max: {max_q:,.1f})",
             min_value=0.0,
-            max_value=max_q if max_q > 0 else 0.0,
+            max_value=max_q if max_q > 0 else 1000000.0,
             step=0.1,
+            value=0.0,
             key=f"qty_{i}",
         )
 
-      if chosen_lot and ship_q > 0 and max_q > 0:
-        prod_name = (
-            fg_dict[chosen_lot]["product"]
-            if "FG" in item_cat
-            else wip_dict[chosen_lot]["product"]
-        )
-        grade_val = (
-            fg_dict[chosen_lot]["grade"]
-            if "FG" in item_cat
-            else wip_dict[chosen_lot]["grade"]
-        )
-        row_idx = (
-            fg_dict[chosen_lot]["row_idx"] if "FG" in item_cat else None
-        )
+      if chosen_lot and ship_q > 0:
+        if ship_q > max_q:
+          st.error(
+              f"❌ รายการที่ #{i+1}: จำนวนส่งออก ({ship_q})"
+              f" เกินกว่าสต็อกที่มีอยู่ ({max_q:,.1f})"
+          )
+        else:
+          prod_name = (
+              fg_dict[chosen_lot]["product"]
+              if "FG" in item_cat
+              else wip_dict[chosen_lot]["product"]
+          )
+          grade_val = (
+              fg_dict[chosen_lot]["grade"]
+              if "FG" in item_cat
+              else wip_dict[chosen_lot]["grade"]
+          )
+          row_idx = (
+              fg_dict[chosen_lot]["row_idx"] if "FG" in item_cat else None
+          )
 
-        shipment_items.append({
-            "category": (
-                "FG (Finished Goods)" if "FG" in item_cat else "WIP (Work in Progress)"
-            ),
-            "lot_no": chosen_lot,
-            "product": prod_name,
-            "grade": grade_val,
-            "qty": ship_q,
-            "row_idx": row_idx,
-        })
+          shipment_items.append({
+              "category": (
+                  "FG (Finished Goods)"
+                  if "FG" in item_cat
+                  else "WIP (Work in Progress)"
+              ),
+              "lot_no": chosen_lot,
+              "product": prod_name,
+              "grade": grade_val,
+              "qty": ship_q,
+              "row_idx": row_idx,
+          })
       st.markdown("---")
 
     note_ship = st.text_area("หมายเหตุการจัดส่งรวม (Note)")
@@ -1004,7 +1011,8 @@ elif menu == "🚚 Shipped Out Module":
         st.error("❌ กรุณาระบุชื่อลูกค้า (Client)")
       elif not shipment_items:
         st.error(
-            "❌ กรุณาเลือก Lot สินค้าและระบุจำนวนที่ต้องการส่งอย่างน้อย 1 รายการ"
+            "❌ กรุณาเลือก Lot สินค้าและระบุจำนวนที่ต้องการส่งมากกว่า 0"
+            " อย่างน้อย 1 รายการ"
         )
       else:
         log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
