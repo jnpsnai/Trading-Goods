@@ -21,8 +21,8 @@ def init_connection():
 client = init_connection()
 
 # เปิด Google Sheet (เปลี่ยนชื่อไฟล์ตามที่คุณตั้ง)
-SHEET_NAME = "Trading Data Log"
-sheet = client.open(SHEET_NAME).sheet1
+sh = client.open("Trading Data Log")
+sheet = sh.get_worksheet(0)  # ดึงแท็บแรกสุดแบบชัวร์ๆ ไม่สนชื่อแท็บ
 
 st.title("🌱 Trading Data Input App")
 st.markdown("ระบบบันทึกข้อมูลผลิตภัณฑ์และติดตามสถานะการส่งออก")
