@@ -82,7 +82,7 @@ current_headers = sheet.row_values(1)
 if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
   sheet.update("A1:N1", [EXPECTED_HEADERS])
 
-# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Records (แยกเก็บผลผลิต FG จาก Packing Module โดยเฉพาะ)
+# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Records
 try:
   packing_records_sheet = sh.worksheet("Packing_Records")
 except:
@@ -102,7 +102,7 @@ except:
       "Note",
   ])
 
-# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Log เดิม (เก็บบันทึกประวัติสรุป)
+# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Log เดิม
 try:
   packing_sheet = sh.worksheet("Packing_Log")
 except:
@@ -646,7 +646,7 @@ elif menu == "📦 Packing Module":
                 f"A{matched_idx}:{col_end_letter}{matched_idx}", [row_values]
             )
 
-            # 2. บันทึกประวัติสรุปการแพ็กกลมๆ ลง Packing_Log (Sheet ย่อยเดิม)
+            # 2. บันทึกประวัติสรุปการแพ็กกลมๆ ลง Packing_Log
             breakdown_str = (
                 f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}:"
                 f" {g3_qty} | {g4_type}: {g4_qty}"
@@ -707,7 +707,7 @@ elif menu == "📦 Packing Module":
     if records_data:
       st.dataframe(pd.DataFrame(records_data), use_container_width=True)
     else:
-      st.info("ยังไม่มีข้อมูลใน Sheet Packing_Records")
+      st.info("ยังไม่มีข้อมูลในSheet Packing_Records")
 
     with st.expander("🔍 ดูประวัติ Packing Log ทั้งหมด"):
       log_data = packing_sheet.get_all_records()
@@ -720,7 +720,7 @@ elif menu == "📦 Packing Module":
 
 
 # ==========================================
-# หน้าที่ 4: Overall Stock Dashboard (แบ่งตาราง WIP / FG แยกอิสระ พร้อมสรุปยอดรวมด้านบน)
+# หน้าที่ 4: Overall Stock Dashboard (ดึงข้อมูลผสานระหว่างแผ่นหลักและ Packing_Records)
 # ==========================================
 elif menu == "📊 Overall Stock Dashboard":
   st.title("📊 Overall Stock Dashboard")
@@ -728,12 +728,52 @@ elif menu == "📊 Overall Stock Dashboard":
       "ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) แบ่งตามประเภท WIP และ FG"
   )
 
-  data = sheet.get_all_records()
+  # 1. ดึงข้อมูลจากแผ่นหลัก (Registration)
+  data_main = sheet.get_all_records()
+  df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
+  if not df_main.empty:
+    df_main.columns = [str(c).strip() for c in df_main.columns]
 
-  if data:
-    df = pd.DataFrame(data)
-    df.columns = [str(c).strip() for c in df.columns]
+  # 2. ดึงข้อมูลจากแผ่น Packing_Records มาแปลงโครงสร้างให้ตรงกัน แล้วนำมารวมเป็น FG
+  records_data = packing_records_sheet.get_all_records()
+  df_packing_fg = pd.DataFrame()
+  if records_data:
+    df_pack_raw = pd.DataFrame(records_data)
+    df_pack_raw.columns = [str(c).strip() for c in df_pack_raw.columns]
 
+    # แปลงคอลัมน์จาก Packing_Records ให้เข้ากับโครงสร้างตารางหลัก
+    # ประกอบด้วย: Cultivar Name, Export Name, THAI STICK Lot. No., Category, Grade, Quantity, Packing date
+    converted_rows = []
+    for _, row in df_pack_raw.iterrows():
+      converted_rows.append({
+          "Cultivar Name": row.get("Cultivar Name", ""),
+          "Supplier Name": "",
+          "Supplier Lot. No.": row.get("Source WIP Lot", ""),
+          "Export Name": row.get("Export Name", ""),
+          "THAI STICK Lot. No.": row.get("Generated FG Lot No.", ""),
+          "Category": "FG (Finished Goods)",
+          "Grade": row.get("Grade", ""),
+          "Quantity": row.get("Quantity", 0),
+          "Inspection Req.": "No",
+          "IR Req.": "No",
+          "Shipment date": "To be decided",
+          "Type": "In House Product",
+          "Status": "Trading Goods Received to Stock",
+          "Packing date": row.get("Packing Date", ""),
+      })
+    df_packing_fg = pd.DataFrame(converted_rows)
+
+  # 3. รวม DataFrame ทั้งสองเข้าด้วยกัน
+  if not df_main.empty and not df_packing_fg.empty:
+    df = pd.concat([df_main, df_packing_fg], ignore_index=True)
+  elif not df_main.empty:
+    df = df_main
+  elif not df_packing_fg.empty:
+    df = df_packing_fg
+  else:
+    df = pd.DataFrame()
+
+  if not df.empty:
     if "Quantity" in df.columns:
       df["Clean_Qty"] = df["Quantity"].apply(clean_quantity)
     else:
