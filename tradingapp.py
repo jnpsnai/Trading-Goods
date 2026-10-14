@@ -57,9 +57,9 @@ client = init_connection()
 SHEET_NAME = "Trading Data Log"
 
 sh = client.open(SHEET_NAME)
-sheet = sh.get_worksheet(0)  # แผ่นหลักสำหรับ Registration
+sheet = sh.get_worksheet(0)  # แผ่นหลักสำหรับ Registration (Trading Goods)
 
-# กำหนดโครงสร้าง Column Header ที่ต้องการ (ให้ "Packing date" อยู่ท้ายสุดตรงกับ Column O)
+# กำหนดโครงสร้าง Column Header สำหรับแผ่นหลัก (Registration)
 EXPECTED_HEADERS = [
     "Cultivar Name",
     "Supplier Name",
@@ -77,12 +77,32 @@ EXPECTED_HEADERS = [
     "Packing date",
 ]
 
-# ตรวจสอบและซิงค์ Header ให้ตรงกันอัตโนมัติ
+# ตรวจสอบและซิงค์ Header แผ่นหลัก
 current_headers = sheet.row_values(1)
 if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
   sheet.update("A1:N1", [EXPECTED_HEADERS])
 
-# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Log
+# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Records (แยกเก็บผลผลิต FG จาก Packing Module โดยเฉพาะ)
+try:
+  packing_records_sheet = sh.worksheet("Packing_Records")
+except:
+  packing_records_sheet = sh.add_worksheet(
+      title="Packing_Records", rows="1000", cols="15"
+  )
+  packing_records_sheet.append_row([
+      "Timestamp",
+      "Source WIP Lot",
+      "Cultivar Name",
+      "Export Name",
+      "Generated FG Lot No.",
+      "Grade",
+      "Quantity",
+      "Waste Qty",
+      "Packing Date",
+      "Note",
+  ])
+
+# ตรวจสอบและสร้าง Sheet ย่อยสำหรับ Packing Log เดิม (เก็บบันทึกประวัติสรุป)
 try:
   packing_sheet = sh.worksheet("Packing_Log")
 except:
@@ -415,13 +435,14 @@ elif menu == "✏️ Edit Registration":
 
 
 # ==========================================
-# หน้าที่ 3: Packing Module
+# หน้าที่ 3: Packing Module (บันทึกลง Sheet แยก: Packing_Records)
 # ==========================================
 elif menu == "📦 Packing Module":
-  st.title("📦 Packing Module (WIP Conversion & Waste Logging)")
+  st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
   st.markdown(
-      "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก ระบุ Packing date (ลง Column O)"
-      " และบันทึกผลผลิตตามเกรด (แยกบรรทัดอิสระสำหรับแต่ละเกรด)"
+      "เลือก WIP Lot ที่ต้องการเบิกมาแพ็ก บันทึก Packing date และระบบจะบันทึกผลผลิต"
+      " FG แยกเกรดลงใน Sheet เฉพาะ (`Packing_Records`) พร้อม Gen รหัส Lot"
+      " รูปแบบเฉพาะตัว (เช่น `WIP-FG2-Big`) อัตโนมัติ"
   )
 
   data = sheet.get_all_records()
@@ -465,7 +486,6 @@ elif menu == "📦 Packing Module":
         ].iloc[0]
         max_wip_qty = float(selected_row["Clean_Qty"])
         cultivar_val = selected_row.get("Cultivar Name", "")
-        supplier_val = selected_row.get("Supplier Name", "")
 
         st.info(
             f"📌 **WIP Lot:** {selected_wip_lot} | **Cultivar:**"
@@ -486,17 +506,17 @@ elif menu == "📦 Packing Module":
             )
           with col_p2:
             pack_date_input = st.date_input(
-                "Packing date (Column O)", value=date.today()
+                "Packing date (วันที่ทำการแพ็ก)", value=date.today()
             )
             packing_date_str = str(pack_date_input)
 
           st.divider()
           st.subheader(
-              "2. บันทึกผลผลิตหลังแพ็ก (แยก 4 ช่องอิสระ เพื่อบันทึกแยกบรรทัด)"
+              "2. บันทึกผลผลิตหลังแพ็ก (ระบุเกรดและจำนวนแยก 4 ช่อง)"
           )
           st.markdown(
-              "ระบุเกรดและจำนวนของผลผลิตที่แพ็กได้ในแต่ละช่อง"
-              " (หากไม่ใช้ช่องไหนให้ใส่จำนวนเป็น 0)"
+              "ระบบจะสร้างรหัส Lot เฉพาะ (เช่น `WIP-FG2-Big`)"
+              " บันทึกลงตารางแยกต่างหากให้ทันที"
           )
 
           grade_options = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
@@ -548,7 +568,7 @@ elif menu == "📦 Packing Module":
           note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
 
           pack_submitted = st.form_submit_button(
-              "🚀 ยืนยันการเบิกแพ็กและสร้าง FG แยกบรรทัดเข้า Stock"
+              "🚀 ยืนยันการแพ็กและบันทึกลงตาราง Packing Records"
           )
 
           if pack_submitted:
@@ -595,7 +615,7 @@ elif menu == "📦 Packing Module":
                 f"A{matched_idx}:{col_end_letter}{matched_idx}", [row_values]
             )
 
-            # 2. บันทึกประวัติสรุปการแพ็กกลมๆ ลง Packing_Log (Sheet ย่อย)
+            # 2. บันทึกประวัติสรุปการแพ็กกลมๆ ลง Packing_Log (Sheet ย่อยเดิม)
             breakdown_str = (
                 f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}:"
                 f" {g3_qty} | {g4_type}: {g4_qty}"
@@ -613,7 +633,8 @@ elif menu == "📦 Packing Module":
                 note,
             ])
 
-            # 3. เพิ่มรายการ FG ลงใน Sheet หลัก (Registration) แยกทีละบรรทัด พร้อมลง Packing Date ที่ Column O
+            # 3. บันทึก FG รายละเอียดแต่ละเกรดลงใน Sheet แยก `Packing_Records`
+            # พร้อมตั้งชื่อรหัส Lot เป็นรูปแบบ: {selected_wip_lot}-FG{index}-{Grade}
             fg_items = [
                 (g1_type, g1_qty),
                 (g2_type, g2_qty),
@@ -626,44 +647,45 @@ elif menu == "📦 Packing Module":
             for idx_fg, (g_type, g_q) in enumerate(fg_items):
               if g_q > 0:
                 created_count += 1
-                new_fg_lot = f"{selected_wip_lot}-FG{created_count}-{timestamp_suffix}"
-                new_fg_dict = {
-                    "Cultivar Name": cultivar_val,
-                    "Supplier Name": supplier_val,
-                    "Supplier Lot. No.": selected_wip_lot,
-                    "Export Name": packed_fg_name
-                    if packed_fg_name
-                    else cultivar_val,
-                    "THAI STICK Lot. No.": new_fg_lot,
-                    "Category": "FG (Finished Goods)",
-                    "Grade": g_type,
-                    "Quantity": str(g_q),
-                    "Inspection Req.": "No",
-                    "IR Req.": "No",
-                    "Shipment date": "To be decided",
-                    "Type": "In House Product",
-                    "Status": "Trading Goods Received to Stock",
-                    "Packing date": packing_date_str,
-                }
-                new_fg_row_data = [
-                    str(new_fg_dict.get(h, "")) for h in latest_headers
-                ]
-                sheet.append_row(new_fg_row_data)
+                custom_fg_lot = (
+                    f"{selected_wip_lot}-FG{created_count}-{g_type}"
+                )
+                packing_records_sheet.append_row([
+                    log_time,
+                    selected_wip_lot,
+                    cultivar_val,
+                    packed_fg_name if packed_fg_name else cultivar_val,
+                    custom_fg_lot,
+                    g_type,
+                    str(g_q),
+                    str(waste_qty) if idx_fg == 0 else "0",  # บันทึก waste ที่แถวแรก
+                    packing_date_str,
+                    note,
+                ])
 
             st.success(
                 f"✅ บันทึกการแพ็กสำเร็จ! หัก WIP เหลือ"
-                f" {remaining_wip_in_stock:,.2f} และสร้างรายการ FG"
-                f" แยกตามเกรดลง Column O (Packing date) จำนวน {created_count}"
-                " บรรทัดเรียบร้อยแล้ว! 🎉"
+                f" {remaining_wip_in_stock:,.2f} และสร้างรหัส Lot FG ใหม่ลงใน"
+                f" Sheet `Packing_Records` จำนวน {created_count}"
+                " รายการเรียบร้อยแล้ว! 🎉"
             )
 
     st.divider()
-    st.subheader("📜 ประวัติการ Packing ทั้งหมด (Packing Log)")
-    log_data = packing_sheet.get_all_records()
-    if log_data:
-      st.dataframe(pd.DataFrame(log_data), use_container_width=True)
+    st.subheader(
+        "📑 ประวัติการผลิตและรหัส Lot FG แยกเกรด (Packing Records Sheet)"
+    )
+    records_data = packing_records_sheet.get_all_records()
+    if records_data:
+      st.dataframe(pd.DataFrame(records_data), use_container_width=True)
     else:
-      st.info("ยังไม่มีประวัติการแพ็กสินค้า")
+      st.info("ยังไม่มีข้อมูลใน Sheet Packing_Records")
+
+    with st.expander("🔍 ดูประวัติ Packing Log ทั้งหมด"):
+      log_data = packing_sheet.get_all_records()
+      if log_data:
+        st.dataframe(pd.DataFrame(log_data), use_container_width=True)
+      else:
+        st.info("ยังไม่มีประวัติใน Packing_Log")
   else:
     st.warning("ยังไม่มีข้อมูลในระบบ Google Sheets")
 
