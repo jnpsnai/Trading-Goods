@@ -299,7 +299,7 @@ elif menu == "📊 Stock Summary & Details":
 
     filtered_df = df.copy()
 
-    # กรองเฉพาะ Status ที่ยังไม่ถูก Delivered และ Qty > 0 (นำเงื่อนไขจุกจิกออกเพื่อให้ FG แสดงครบถ้วน)
+    # กรองเฉพาะ Status ที่ยังไม่ถูก Delivered และ Qty > 0
     if "Status" in filtered_df.columns:
       filtered_df = filtered_df[
           ~filtered_df["Status"].astype(str).str.strip().str.lower().eq("delivered")
@@ -530,8 +530,8 @@ elif menu == "📝 Trading Goods Registration":
       category = st.selectbox("6. Category", ["FG (Finished Goods)", "WIP (Work in Progress)"])
       grade = st.selectbox("7. Grade", ["Big", "Small", "Mix", "F", "Grade A", "Premium"])
     with col2:
-      receive_date_str = str(st.date_input("8. Receive date (Column H)", value=date.today(), key="reg_rec_dt"))
-      quantity = st.number_input("9. Quantity", min_value=0.0, step=0.1)
+      receive_date_str = str(st.date_input("8. Receive date", value=date.today(), key="reg_rec_dt"))
+      quantity = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1)
       remark_qty = st.text_input("Remark Qty (เช่น 5x1000)", placeholder="ระบุรายละเอียดจำนวนถุง/แพ็ก")
 
       insp_con = st.container()
@@ -559,8 +559,7 @@ elif menu == "📝 Trading Goods Registration":
           "14. Status",
           ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"],
       )
-      packing_date_str = str(st.date_input("15. Packing date (Column O)", value=date.today(), key="reg_pack_dt"))
-
+      
     if st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets"):
       latest_headers = sheet.row_values(1)
       row_dict = {
@@ -568,7 +567,7 @@ elif menu == "📝 Trading Goods Registration":
           "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
           "Receive date": receive_date_str, "Quantity": str(quantity), "Remark Qty": remark_qty,
           "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
-          "Type": prod_type, "Status": status, "Packing date": packing_date_str,
+          "Type": prod_type, "Status": status, "Packing date": "",
       }
       sheet.append_row([str(row_dict.get(h, "")) for h in latest_headers])
       st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
@@ -629,10 +628,10 @@ elif menu == "✏️ Edit Registration":
             old_rec_date = str(current_data.get("Receive date", ""))
             try: default_rec_dt = datetime.strptime(old_rec_date, "%Y-%m-%d").date()
             except: default_rec_dt = date.today()
-            e_receive_date_str = str(st.date_input("8. Receive date (Column H)", value=default_rec_dt, key="edit_receive_date"))
+            e_receive_date_str = str(st.date_input("8. Receive date", value=default_rec_dt, key="edit_receive_date"))
 
             old_qty = float(current_data.get("Quantity", 0.0))
-            e_qty = st.number_input("9. Quantity", min_value=0.0, step=0.1, value=old_qty)
+            e_qty = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1, value=old_qty)
             e_remark_qty = st.text_input("Remark Qty", value=str(current_data.get("Remark Qty", "")), key="edit_remark_qty")
 
             old_insp = str(current_data.get("Inspection Req.", "No"))
@@ -668,11 +667,6 @@ elif menu == "✏️ Edit Registration":
             old_status = str(current_data.get("Status", ""))
             e_status = st.selectbox("14. Status", status_opt, index=status_opt.index(old_status) if old_status in status_opt else 0)
 
-            old_pack_date = str(current_data.get("Packing date", ""))
-            try: default_pack_dt = datetime.strptime(old_pack_date, "%Y-%m-%d").date()
-            except: default_pack_dt = date.today()
-            e_packing_date_str = str(st.date_input("15. Packing date (Column O)", value=default_pack_dt, key="edit_pack_date"))
-
           st.markdown("")
           if st.form_submit_button("🔄 อัปเดตข้อมูล (Update Google Sheets)"):
             latest_headers = sheet.row_values(1)
@@ -681,7 +675,7 @@ elif menu == "✏️ Edit Registration":
                 "Export Name": e_export, "THAI STICK Lot. No.": e_thai_lot, "Category": e_category, "Grade": e_grade,
                 "Receive date": e_receive_date_str, "Quantity": str(e_qty), "Remark Qty": e_remark_qty,
                 "Inspection Req.": e_insp, "IR Req.": e_ir, "Shipment date": e_shipment_date,
-                "Type": e_type, "Status": e_status, "Packing date": e_packing_date_str,
+                "Type": e_type, "Status": e_status, "Packing date": "",
             }
             updated_row_data = [str(updated_dict.get(h, "")) for h in latest_headers]
             col_end_letter = chr(64 + len(latest_headers)).upper()
