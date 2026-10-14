@@ -635,7 +635,7 @@ elif menu == "📝 Trading Goods Registration":
     with col2:
       receive_date_str = str(
           st.date_input(
-              "8. Receive date (Column H)",
+              "8. Receive date",
               value=date.today(),
               key="reg_rec_dt",
           )
@@ -678,7 +678,7 @@ elif menu == "📝 Trading Goods Registration":
       )
       packing_date_str = str(
           st.date_input(
-              "15. Packing date (Column O)",
+              "15. Packing date",
               value=date.today(),
               key="reg_pack_dt",
           )
