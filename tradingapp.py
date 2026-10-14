@@ -199,8 +199,7 @@ def clean_quantity(val):
 if menu == "🚨 Delivery Issue":
   st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
   st.markdown(
-      "แสดงรายการสินค้าที่มีกำหนดส่ง (Shipment Date) เรียงจากใกล้ไปไกล"
-      " โดยรายการที่เป็น 'To be decided' จะถูกจัดไว้ท้ายสุด"
+      "แสดงรายการสินค้าที่มีกำหนดส่ง (Shipment Date) โดยจัดกลุ่มตามวันจัดส่งอย่างชัดเจน"
   )
 
   data_main = sheet.get_all_records()
@@ -210,32 +209,60 @@ if menu == "🚨 Delivery Issue":
     delivery_df = df_main.copy()
     delivery_df["Clean_Qty"] = delivery_df["Quantity"].apply(clean_quantity)
 
+    # กรองเฉพาะงานที่ยังไม่ Delivered และมี Qty > 0
     if "Status" in delivery_df.columns:
       delivery_df = delivery_df[
-          (
-              ~delivery_df["Status"]
-              .astype(str)
-              .str.strip()
-              .str.lower()
-              .eq("delivered")
-          )
+          (~delivery_df["Status"].astype(str).str.strip().str.lower().eq("delivered"))
           & (delivery_df["Clean_Qty"] > 0)
       ]
 
     if not delivery_df.empty and "Shipment date" in delivery_df.columns:
-      delivery_df["Shipment date str"] = (
-          delivery_df["Shipment date"].astype(str).str.strip()
-      )
-      delivery_df["Is_TBD"] = (
-          delivery_df["Shipment date str"].str.lower() == "to be decided"
-      )
-      delivery_df = delivery_df.sort_values(
-          by=["Is_TBD", "Shipment date str"], ascending=[True, True]
-      )
-      display_delivery_df = delivery_df.drop(
-          columns=["Is_TBD", "Clean_Qty"], errors="ignore"
-      )
-      st.dataframe(display_delivery_df, use_container_width=True)
+      delivery_df["Shipment date str"] = delivery_df["Shipment date"].astype(str).str.strip()
+      delivery_df["Is_TBD"] = delivery_df["Shipment date str"].str.lower() == "to be decided"
+
+      # แยกกลุ่มวันที่ระบุชัดเจน และ กลุ่มที่รอตัดสินใจ (TBD)
+      tbd_df = delivery_df[delivery_df["Is_TBD"]].copy()
+      dated_df = delivery_df[~delivery_df["Is_TBD"]].copy()
+
+      # จัดเรียงวันที่ (จากใกล้ไปไกล)
+      dated_df = dated_df.sort_values(by="Shipment date str", ascending=True)
+      unique_dates = dated_df["Shipment date str"].unique()
+
+      # วนลูปสร้างตารางตามวันที่มีกำหนดส่ง (Dated items)
+      for d_date in unique_dates:
+        sub_df = dated_df[dated_df["Shipment date str"] == d_date]
+        sub_display = sub_df.drop(columns=["Is_TBD", "Clean_Qty", "Shipment date str"], errors="ignore")
+        
+        # HTML/CSS Banner สำหรับวันที่ระบุชัดเจน (สีเขียว Pastel)
+        st.markdown(
+            f"""
+            <div style="background-color: #4fd1c5; color: #1a202c; padding: 10px 15px; 
+            border-radius: 8px; margin-top: 15px; margin-bottom: 10px; font-weight: bold; font-size: 16px; 
+            border-left: 5px solid #319795;">
+                📅 กำหนดส่งวันที่: {d_date}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.dataframe(sub_display, use_container_width=True)
+
+      # สร้างตารางสำหรับกลุ่ม To be decided (ถ้ามี)
+      if not tbd_df.empty:
+        tbd_display = tbd_df.drop(columns=["Is_TBD", "Clean_Qty", "Shipment date str"], errors="ignore")
+        
+        # HTML/CSS Banner สำหรับ To be decided (สีส้ม Pastel)
+        st.markdown(
+            f"""
+            <div style="background-color: #f6ad55; color: white; padding: 10px 15px; 
+            border-radius: 8px; margin-top: 25px; margin-bottom: 10px; font-weight: bold; font-size: 16px;
+            border-left: 5px solid #dd6b20;">
+                ⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ)
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+        st.dataframe(tbd_display, use_container_width=True)
+
     else:
       st.info("ไม่พบรายการที่ต้องจัดส่งในขณะนี้")
   else:
