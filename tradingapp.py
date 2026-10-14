@@ -57,12 +57,12 @@ client = init_connection()
 SHEET_NAME = "Trading Data Log"
 sheet = client.open(SHEET_NAME).sheet1
 
-# --- 4. Sidebar เมนูด้านซ้าย (เปลี่ยนเป็นแบบคลิกเลือกด้วย radio) ---
+# --- 4. Sidebar เมนูด้านซ้าย ---
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
     "เลือกเมนูการใช้งาน",
-    ["📝 Trading Registration", "📊 Overall Stock Dashboard"],
+    ["📝 Trading Goods Registration", "📊 Overall Stock Dashboard"],
 )
 st.sidebar.markdown("---")
 st.sidebar.info(
@@ -79,10 +79,10 @@ def clean_quantity(val):
 
 
 # ==========================================
-# หน้าที่ 1: Trading Registration (ลงข้อมูล)
+# หน้าที่ 1: Trading Goods Registration (ลงข้อมูล)
 # ==========================================
-if menu == "📝 Trading Registration":
-  st.title("📝 Trading Data Registration")
+if menu == "📝 Trading Goods Registration":
+  st.title("📝 Trading Goods Registration")
   st.markdown("กรอกข้อมูลผลิตภัณฑ์และรายละเอียดล็อตสินค้าใหม่ลงในระบบ")
 
   with st.form("trading_form", clear_on_submit=True):
@@ -102,12 +102,38 @@ if menu == "📝 Trading Registration":
       quantity = st.number_input("7. Quantity", min_value=0.0, step=0.1)
       inspection_req = st.selectbox("8. Inspection Req.", ["Yes", "No"])
       ir_req = st.selectbox("9. IR Req.", ["Yes", "No"])
-      shipment_date = st.date_input("10. Shipment date", value=date.today())
-      prod_type = st.text_input(
-          "11. Type", placeholder="เช่น Product, Service, etc."
+
+      # 2. จัดการ Shipment date แบบมีเงื่อนไข To be decided
+      is_tbd = st.checkbox("10. Shipment date: To be decided (ยังไม่ระบุวัน)")
+      if is_tbd:
+        shipment_date = "To be decided"
+        st.date_input(
+            "10. Shipment date", value=date.today(), disabled=True
+        )  # แสดงผลเทาๆ ไว้กันงง
+      else:
+        shipment_date = str(st.date_input("10. Shipment date", value=date.today()))
+
+      # 3. Type เป็น Dropdown ตามตัวเลือกใหม่
+      prod_type = st.selectbox(
+          "11. Type",
+          [
+              "Inspection & Packing Service",
+              "Trading Goods (TS)",
+              "Consignment",
+              "In House Product",
+          ],
       )
+
+      # 4. Status เป็น Dropdown ตามตัวเลือกใหม่
       status = st.selectbox(
-          "12. Status", ["Pending", "In Progress", "Completed", "Delivery"]
+          "12. Status",
+          [
+              "Trading Goods Received to Stock",
+              "Inspection Completed",
+              "Pending Packing",
+              "Delivered",
+              "Waiting for Return",
+          ],
       )
 
     st.markdown("")
@@ -124,7 +150,7 @@ if menu == "📝 Trading Registration":
           str(quantity),
           inspection_req,
           ir_req,
-          str(shipment_date),
+          shipment_date,
           prod_type,
           status,
       ]
@@ -160,26 +186,4 @@ elif menu == "📊 Overall Stock Dashboard":
     else:
       df["Clean_Qty"] = 0.0
 
-    # เงื่อนไขกรอง On-hand stock: Status ไม่ใช่ 'Delivery' และ Type ไม่ใช่ 'Service'
-    filtered_df = df.copy()
-
-    if "Status" in filtered_df.columns and "Type" in filtered_df.columns:
-      filtered_df = filtered_df[
-          (filtered_df["Status"].astype(str).str.strip().str.lower() != "delivery")
-          & (filtered_df["Type"].astype(str).str.strip().str.lower() != "service")
-      ]
-
-    # คำนวณยอดแยกตามเกรด (Big, Small, Mix)
-    if "Grade" in filtered_df.columns:
-      stock_big = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "big"
-      ]["Clean_Qty"].sum()
-      stock_small = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "small"
-      ]["Clean_Qty"].sum()
-      stock_mix = filtered_df[
-          filtered_df["Grade"].astype(str).str.strip().str.lower() == "mix"
-      ]["Clean_Qty"].sum()
-      total_on_hand = filtered_df["Clean_Qty"].sum()
-    else:
-      stock_big, stock_
+    # เงื่อนไขกรอง On-hand stock: Status ไม่ใช่ 'Delivered'
