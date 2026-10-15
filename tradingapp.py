@@ -662,6 +662,9 @@ elif menu == "✏️ Edit Registration":
     lot_column = "THAI STICK Lot. No." if "THAI STICK Lot. No." in df_all.columns else df_all.columns[4]
 
     df_all["Clean_Qty"] = df_all["Quantity"].apply(clean_quantity) if "Quantity" in df_all.columns else 0.0
+    # เก็บเลขบรรทัดเดิมไว้ เพื่อให้อัปเดตได้ถูกบรรทัดเป๊ะๆ แม้ Lot ซ้ำกัน
+    df_all["Original_Row_Index"] = df_all.index + 2
+
     if "Status" in df_all.columns:
       editable_df = df_all[(df_all["Clean_Qty"] > 0) & (~df_all["Status"].astype(str).str.strip().str.lower().eq("delivered"))].copy()
     else:
@@ -670,12 +673,35 @@ elif menu == "✏️ Edit Registration":
     if editable_df.empty:
       st.info("ℹ️ ไม่มีล็อตสินค้าที่สามารถแก้ไขได้ในขณะนี้")
     else:
-      lot_list = editable_df[lot_column].astype(str).tolist()
-      selected_lot = st.selectbox("🔍 เลือก THAI STICK Lot. No. ที่ต้องการแก้ไข", lot_list)
+      edit_options = []
+      edit_map = {}
 
-      if selected_lot:
-        matched_row_idx = int(df_all[df_all[lot_column].astype(str) == selected_lot].index[0]) + 2
-        current_data = df_all[df_all[lot_column].astype(str) == selected_lot].iloc[0]
+      for _, r in editable_df.iterrows():
+        lot_no = str(r.get(lot_column, "")).strip()
+        if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+        
+        cultivar = str(r.get("Cultivar Name", ""))
+        grade = str(r.get("Grade", ""))
+        qty = float(r["Clean_Qty"])
+        row_idx = r["Original_Row_Index"]
+        df_idx = r.name
+        
+        # สร้างข้อความสำหรับแสดงใน Dropdown
+        disp = f"Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
+        edit_options.append(disp)
+        edit_map[disp] = {
+            "row_idx": row_idx,
+            "lot_no": lot_no,
+            "df_index": df_idx
+        }
+
+      selected_disp = st.selectbox("🔍 เลือกข้อมูลที่ต้องการแก้ไข (Lot No. & Size)", edit_options)
+
+      if selected_disp:
+        selected_info = edit_map[selected_disp]
+        matched_row_idx = selected_info["row_idx"]
+        selected_lot = selected_info["lot_no"]
+        current_data = df_all.iloc[selected_info["df_index"]]
 
         with st.form("edit_form"):
           col1, col2 = st.columns(2)
@@ -695,12 +721,13 @@ elif menu == "✏️ Edit Registration":
             e_grade = st.selectbox("7. Grade", grades_opt, index=grades_opt.index(old_grade) if old_grade in grades_opt else 0)
 
           with col2:
-            old_rec_date = str(current_data.get("Receive date", ""))
-            try: default_rec_dt = datetime.strptime(old_rec_date, "%Y-%m-%d").date()
+            # ดักรับชื่อคอลัมน์วันที่ 3 แบบตามที่เคยแก้ไว้
+            old_rec_date = str(current_data.get("Receive date", current_data.get("Date receive", current_data.get("Date Receive", ""))))
+            try: default_rec_dt = pd.to_datetime(old_rec_date, dayfirst=True).date() if old_rec_date and str(old_rec_date).strip() else date.today()
             except: default_rec_dt = date.today()
             e_receive_date_str = str(st.date_input("8. Receive date", value=default_rec_dt, key="edit_receive_date"))
 
-            old_qty = float(current_data.get("Quantity", 0.0))
+            old_qty = float(current_data.get("Clean_Qty", 0.0))
             e_qty = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1, value=old_qty)
             e_remark_qty = st.text_input("Remark Qty", value=str(current_data.get("Remark Qty", "")), key="edit_remark_qty")
 
@@ -721,7 +748,7 @@ elif menu == "✏️ Edit Registration":
             old_date = str(current_data.get("Shipment date", ""))
             ship_con = st.container()
             e_is_tbd_ship = st.checkbox("To be decided", value=(old_date == "To be decided"), key=f"edit_tbd_ship")
-            try: default_dt = datetime.strptime(old_date, "%Y-%m-%d").date() if old_date != "To be decided" else date.today()
+            try: default_dt = pd.to_datetime(old_date, dayfirst=True).date() if old_date != "To be decided" and old_date.strip() else date.today()
             except: default_dt = date.today()
             e_ship_val = ship_con.date_input("12. Shipment date", value=default_dt, disabled=e_is_tbd_ship, key=f"edit_ship")
             e_shipment_date = "To be decided" if e_is_tbd_ship else str(e_ship_val)
@@ -743,14 +770,19 @@ elif menu == "✏️ Edit Registration":
             updated_dict = {
                 "Cultivar Name": e_cultivar, "Supplier Name": e_supplier, "Supplier Lot. No.": e_supp_lot,
                 "Export Name": e_export, "THAI STICK Lot. No.": e_thai_lot, "Category": e_category, "Grade": e_grade,
-                "Receive date": e_receive_date_str, "Quantity": str(e_qty), "Remark Qty": e_remark_qty,
+                "Receive date": e_receive_date_str, 
+                "Date receive": e_receive_date_str, 
+                "Date Receive": e_receive_date_str, 
+                "Quantity": str(e_qty), "Remark Qty": e_remark_qty,
                 "Inspection Req.": e_insp, "IR Req.": e_ir, "Shipment date": e_shipment_date,
                 "Type": e_type, "Status": e_status, "Packing date": "",
             }
             updated_row_data = [str(updated_dict.get(h, "")) for h in latest_headers]
             col_end_letter = chr(64 + len(latest_headers)).upper()
+            
+            # บันทึกลงบรรทัดเดิมเป๊ะๆ ที่ล็อคเป้าไว้
             sheet.update(f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}", [updated_row_data])
-            st.success(f"อัปเดตข้อมูลของล็อต {selected_lot} เรียบร้อยแล้ว! 🎉")
+            st.success(f"อัปเดตข้อมูลของ Lot: {selected_lot} (Size: {e_grade}) เรียบร้อยแล้ว! 🎉")
   else:
     st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
 
