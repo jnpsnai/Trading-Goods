@@ -464,30 +464,34 @@ elif menu == "📈 Monthly Report":
         cat = str(r.get("Category", ""))
         rec_date = str(r.get("Receive date", ""))
         q = clean_quantity(r.get("Quantity", 0))
-        try:
-          p_dt = datetime.strptime(rec_date, "%Y-%m-%d")
-          if p_dt.year == selected_year and p_dt.month == selected_month_num:
-            if "WIP" in cat.upper():
-              wip_receive_total += q
-              has_wip_activity = True
-            elif "FG" in cat.upper():
-              fg_receive_total += q
-              has_fg_activity = True
-        except:
-          pass
+        if rec_date and str(rec_date).strip():  # ป้องกันช่องว่างเปล่า
+            try:
+              # เปลี่ยนจาก datetime.strptime เป็น pd.to_datetime เพื่อให้อ่านวันที่ได้ทุก Format
+              p_dt = pd.to_datetime(rec_date, dayfirst=True) 
+              if p_dt.year == selected_year and p_dt.month == selected_month_num:
+                if "WIP" in cat.upper():
+                  wip_receive_total += q
+                  has_wip_activity = True
+                elif "FG" in cat.upper():
+                  fg_receive_total += q
+                  has_fg_activity = True
+            except:
+              pass
 
     if not df_pack_rep.empty:
       df_pack_rep.columns = [str(c).strip() for c in df_pack_rep.columns]
       for _, r in df_pack_rep.iterrows():
         p_date = str(r.get("Packing Date", ""))
         q = clean_quantity(r.get("Quantity", 0))
-        try:
-          p_dt = datetime.strptime(p_date, "%Y-%m-%d")
-          if p_dt.year == selected_year and p_dt.month == selected_month_num:
-            fg_receive_total += q
-            has_fg_activity = True
-        except:
-          pass
+        if p_date and str(p_date).strip(): # ป้องกันช่องว่างเปล่า
+            try:
+              # เปลี่ยนจาก datetime.strptime เป็น pd.to_datetime เพื่อให้อ่านวันที่ได้ทุก Format
+              p_dt = pd.to_datetime(p_date, dayfirst=True)
+              if p_dt.year == selected_year and p_dt.month == selected_month_num:
+                fg_receive_total += q
+                has_fg_activity = True
+            except:
+              pass
 
     wip_shipped_monthly = 0.0
     fg_shipped_monthly = 0.0
