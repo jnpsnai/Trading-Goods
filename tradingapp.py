@@ -545,8 +545,19 @@ elif menu == "📈 Monthly Report":
 # หน้าที่ 4: Trading Goods Registration
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
-  st.title("📝 Trading Goods Registration")
-  st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
+  col_head1, col_head2 = st.columns([7, 3])
+  with col_head1:
+    st.title("📝 Trading Goods Registration")
+    st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
+  
+  with col_head2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("🔗 Direct Google Sheets (Multiple Batch)"):
+      pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd", placeholder="กรอกรหัสผ่านเพื่อแสดงลิงก์")
+      if pwd == "tstd":
+        st.markdown("[🟢 **คลิกที่นี่เพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit?gid=0#gid=0)")
+      elif pwd != "":
+        st.error("รหัสผ่านไม่ถูกต้อง ❌")
 
   with st.form("trading_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
