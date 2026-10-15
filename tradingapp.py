@@ -410,19 +410,30 @@ elif menu == "📊 Stock Summary & Details":
 elif menu == "📈 Monthly Report":
   st.title("📈 Monthly Report (รายงานสรุปผลการดำเนินงานรายเดือน)")
   st.markdown(
-      "เลือกเดือนและปีที่ต้องการตรวจสอบรายงานสต็อกเคลื่อนไหวและประวัติการส่งออก"
+      "เลือกเดือนและปีที่ต้องการตรวจสอบรายงานสต็อกเคลื่อนไหวและประวัติการส่งออก (ค่าเริ่มต้นจะแสดงข้อมูลของเดือนปัจจุบัน)"
   )
+
+  # --- ดึงวันที่ปัจจุบัน เพื่อตั้งค่า Default สำหรับ Year และ Month ---
+  today = date.today()
+  current_year = today.year
+  current_month = today.month
 
   col_y, col_m = st.columns(2)
   with col_y:
-    selected_year = st.selectbox("เลือกปี (Year)", [2026, 2025, 2024, 2023], index=0, key="rep_year")
+    year_options = [2026, 2025, 2024, 2023]
+    # ตรวจสอบว่าปีปัจจุบันอยู่ในลิสต์ไหม ถ้าอยู่ให้เลือกเป็น Default ถ้าไม่มีให้ใช้ช่องแรก
+    default_year_idx = year_options.index(current_year) if current_year in year_options else 0
+    selected_year = st.selectbox("เลือกปี (Year)", year_options, index=default_year_idx, key="rep_year")
+    
   with col_m:
     months_dict = {
         "มกราคม (01)": 1, "กุมภาพันธ์ (02)": 2, "มีนาคม (03)": 3, "เมษายน (04)": 4,
         "พฤษภาคม (05)": 5, "มิถุนายน (06)": 6, "กรกฎาคม (07)": 7, "สิงหาคม (08)": 8,
         "กันยายน (09)": 9, "ตุลาคม (10)": 10, "พฤศจิกายน (11)": 11, "ธันวาคม (12)": 12,
     }
-    selected_month_label = st.selectbox("เลือกเดือน (Month)", list(months_dict.keys()), key="rep_month")
+    # index ของเดือนจะเริ่มที่ 0 (มกราคม) ดังนั้นเอาเดือนปัจจุบัน - 1
+    default_month_idx = current_month - 1
+    selected_month_label = st.selectbox("เลือกเดือน (Month)", list(months_dict.keys()), index=default_month_idx, key="rep_month")
     selected_month_num = months_dict[selected_month_label]
 
   st.divider()
@@ -432,11 +443,27 @@ elif menu == "📈 Monthly Report":
       "🚚 2. Shipped Out Report & Reasons",
   ])
 
+  # --- ฟังก์ชันตัวช่วยสำหรับอ่านวันที่ให้แม่นยำ (แก้ปัญหา YYYY/MM/DD สลับเป็นเดือนมกราคม) ---
+  def parse_robust_date(date_val):
+    if not date_val or not str(date_val).strip():
+        return pd.NaT
+    d_str = str(date_val).strip()
+    try:
+        # ลองอ่านแบบมาตรฐานปกติก่อน (จะแก้ปัญหา 2026/10/01 ให้อ่าน 10 เป็นเดือนได้อย่างถูกต้อง)
+        dt = pd.to_datetime(d_str, errors='coerce')
+        if pd.isna(dt):
+            # ถ้ายังอ่านไม่ได้ ค่อยบังคับให้ใช้อ่านแบบ วัน/เดือน/ปี (DD/MM/YYYY)
+            dt = pd.to_datetime(d_str, format='%d/%m/%Y', errors='coerce')
+        return dt
+    except:
+        return pd.NaT
+
   shipped_data = shipped_sheet.get_all_records()
   df_shipped = pd.DataFrame(shipped_data) if shipped_data else pd.DataFrame()
   if not df_shipped.empty:
     df_shipped.columns = [str(c).strip() for c in df_shipped.columns]
-    df_shipped["Parsed_Date"] = pd.to_datetime(df_shipped["Shipment Date"], errors="coerce")
+    # ใช้ฟังก์ชันอ่านวันที่ตัวใหม่
+    df_shipped["Parsed_Date"] = df_shipped["Shipment Date"].apply(parse_robust_date)
     df_shipped["Clean_Shipped_Qty"] = df_shipped["Shipped Qty"].apply(clean_quantity)
     monthly_shipped = df_shipped[
         (df_shipped["Parsed_Date"].dt.year == selected_year) & 
@@ -462,36 +489,33 @@ elif menu == "📈 Monthly Report":
       df_main_rep.columns = [str(c).strip() for c in df_main_rep.columns]
       for _, r in df_main_rep.iterrows():
         cat = str(r.get("Category", ""))
-        rec_date = str(r.get("Receive date", ""))
+        # เผื่อไว้กรณีคุณยังไม่ได้เปลี่ยนชื่อหัวคอลัมน์ใน Sheet
+        rec_date = r.get("Receive date", r.get("Date receive", r.get("Date Receive", "")))
         q = clean_quantity(r.get("Quantity", 0))
-        if rec_date and str(rec_date).strip():  # ป้องกันช่องว่างเปล่า
-            try:
-              # เปลี่ยนจาก datetime.strptime เป็น pd.to_datetime เพื่อให้อ่านวันที่ได้ทุก Format
-              p_dt = pd.to_datetime(rec_date, dayfirst=True) 
-              if p_dt.year == selected_year and p_dt.month == selected_month_num:
+        
+        # ใช้ฟังก์ชันใหม่ในการแปลงวันที่
+        p_dt = parse_robust_date(rec_date)
+        if pd.notna(p_dt):
+            if p_dt.year == selected_year and p_dt.month == selected_month_num:
                 if "WIP" in cat.upper():
-                  wip_receive_total += q
-                  has_wip_activity = True
+                    wip_receive_total += q
+                    has_wip_activity = True
                 elif "FG" in cat.upper():
-                  fg_receive_total += q
-                  has_fg_activity = True
-            except:
-              pass
+                    fg_receive_total += q
+                    has_fg_activity = True
 
     if not df_pack_rep.empty:
       df_pack_rep.columns = [str(c).strip() for c in df_pack_rep.columns]
       for _, r in df_pack_rep.iterrows():
-        p_date = str(r.get("Packing Date", ""))
+        p_date = r.get("Packing Date", "")
         q = clean_quantity(r.get("Quantity", 0))
-        if p_date and str(p_date).strip(): # ป้องกันช่องว่างเปล่า
-            try:
-              # เปลี่ยนจาก datetime.strptime เป็น pd.to_datetime เพื่อให้อ่านวันที่ได้ทุก Format
-              p_dt = pd.to_datetime(p_date, dayfirst=True)
-              if p_dt.year == selected_year and p_dt.month == selected_month_num:
+        
+        # ใช้ฟังก์ชันใหม่ในการแปลงวันที่
+        p_dt = parse_robust_date(p_date)
+        if pd.notna(p_dt):
+            if p_dt.year == selected_year and p_dt.month == selected_month_num:
                 fg_receive_total += q
                 has_fg_activity = True
-            except:
-              pass
 
     wip_shipped_monthly = 0.0
     fg_shipped_monthly = 0.0
