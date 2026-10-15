@@ -773,85 +773,113 @@ elif menu == "📦 Packing Module":
       st.warning("⚠️ ยังไม่พบข้อมูลสินค้าประเภท 'WIP' ในระบบ")
     else:
       wip_df["Clean_Qty"] = wip_df["Quantity"].apply(clean_quantity)
-      available_wip = wip_df[wip_df["Clean_Qty"] > 0]
+      available_wip = wip_df[wip_df["Clean_Qty"] > 0].copy()
 
-      if available_wip.empty: st.warning("⚠️ มีข้อมูล WIP แต่ทุก Lot มีจำนวนคงเหลือเป็น 0")
+      if available_wip.empty: 
+        st.warning("⚠️ มีข้อมูล WIP แต่ทุก Lot มีจำนวนคงเหลือเป็น 0")
       else:
-        wip_lot_list = available_wip["THAI STICK Lot. No."].astype(str).tolist()
-        selected_wip_lot = st.selectbox("🔍 เลือก WIP Lot ที่ต้องการนำมาเบิกแพ็ก", wip_lot_list)
+        # เก็บ Index เดิมบวก 2 เพื่อระบุบรรทัดใน Google Sheet ได้แม่นยำ (แก้ปัญหา Lot ซ้ำกันแต่คนละไซส์)
+        available_wip["Original_Row_Index"] = available_wip.index + 2 
 
-        selected_row = available_wip[available_wip["THAI STICK Lot. No."].astype(str) == selected_wip_lot].iloc[0]
-        max_wip_qty = float(selected_row["Clean_Qty"])
-        cultivar_val = selected_row.get("Cultivar Name", "")
+        wip_options = []
+        wip_map = {}
 
-        st.info(f"📌 **WIP Lot:** {selected_wip_lot} | **Cultivar:** {cultivar_val} | **สต็อกคงเหลือปัจจุบัน:** {max_wip_qty:,.2f}")
+        for _, r in available_wip.iterrows():
+          lot_no = str(r.get("THAI STICK Lot. No.", "")).strip()
+          if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+          
+          cultivar = str(r.get("Cultivar Name", ""))
+          grade = str(r.get("Grade", ""))
+          qty = float(r["Clean_Qty"])
+          row_idx = r["Original_Row_Index"]
+          
+          # สร้างข้อความสำหรับแสดงใน Dropdown ให้เห็นทั้ง Lot และ Size (Grade)
+          disp = f"Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
+          wip_options.append(disp)
+          wip_map[disp] = {
+              "lot_no": lot_no,
+              "cultivar": cultivar,
+              "grade": grade,
+              "qty": qty,
+              "row_idx": row_idx
+          }
 
-        with st.form("packing_form"):
-          col_p1, col_p2 = st.columns(2)
-          with col_p1:
-            withdraw_qty = st.number_input("จำนวนเบิก (Withdraw Qty)", min_value=0.0, max_value=max_wip_qty, step=0.1, value=max_wip_qty)
-            packing_date_str = str(st.date_input("Packing date", value=date.today()))
-          with col_p2:
-            packed_fg_name = st.text_input("ชื่อผลิตภัณฑ์หลังแพ็ก", value=cultivar_val)
+        selected_wip_disp = st.selectbox("🔍 เลือก WIP Lot และ Size ที่ต้องการนำมาเบิกแพ็ก", wip_options)
 
-          st.divider()
-          grade_options = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
-          c1, c2 = st.columns(2)
-          with c1: g1_type = st.selectbox("เกรดช่องที่ 1", grade_options, index=0)
-          with c2: g1_qty = st.number_input("จำนวนช่องที่ 1", min_value=0.0, step=0.1, key="g1")
+        if selected_wip_disp:
+          selected_info = wip_map[selected_wip_disp]
+          selected_wip_lot = selected_info["lot_no"]
+          max_wip_qty = selected_info["qty"]
+          cultivar_val = selected_info["cultivar"]
+          wip_grade = selected_info["grade"]
+          matched_idx = selected_info["row_idx"] # ได้บรรทัดที่ถูกต้องของ Google Sheet มาเลย
 
-          c3, c4 = st.columns(2)
-          with c3: g2_type = st.selectbox("เกรดช่องที่ 2", grade_options, index=1)
-          with c4: g2_qty = st.number_input("จำนวนช่องที่ 2", min_value=0.0, step=0.1, key="g2")
+          st.info(f"📌 **WIP Lot:** {selected_wip_lot} | **Size/Grade:** {wip_grade} | **Cultivar:** {cultivar_val} | **สต็อกคงเหลือ:** {max_wip_qty:,.2f}")
 
-          c5, c6 = st.columns(2)
-          with c5: g3_type = st.selectbox("เกรดช่องที่ 3", grade_options, index=2)
-          with c6: g3_qty = st.number_input("จำนวนช่องที่ 3", min_value=0.0, step=0.1, key="g3")
+          with st.form("packing_form"):
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+              withdraw_qty = st.number_input("จำนวนเบิก (Withdraw Qty)", min_value=0.0, max_value=max_wip_qty, step=0.1, value=max_wip_qty)
+              packing_date_str = str(st.date_input("Packing date", value=date.today()))
+            with col_p2:
+              packed_fg_name = st.text_input("ชื่อผลิตภัณฑ์หลังแพ็ก", value=cultivar_val)
 
-          c7, c8 = st.columns(2)
-          with c7: g4_type = st.selectbox("เกรดช่องที่ 4", grade_options, index=3)
-          with c8: g4_qty = st.number_input("จำนวนช่องที่ 4", min_value=0.0, step=0.1, key="g4")
+            st.divider()
+            grade_options = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
+            c1, c2 = st.columns(2)
+            with c1: g1_type = st.selectbox("เกรดช่องที่ 1", grade_options, index=0)
+            with c2: g1_qty = st.number_input("จำนวนช่องที่ 1", min_value=0.0, step=0.1, key="g1")
 
-          st.divider()
-          waste_qty = st.number_input("จำนวนของเสีย (Waste Qty)", min_value=0.0, step=0.1)
-          note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
+            c3, c4 = st.columns(2)
+            with c3: g2_type = st.selectbox("เกรดช่องที่ 2", grade_options, index=1)
+            with c4: g2_qty = st.number_input("จำนวนช่องที่ 2", min_value=0.0, step=0.1, key="g2")
 
-          if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลงตาราง Packing Records"):
-            total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
-            if withdraw_qty <= 0: st.error("❌ กรุณาระบุจำนวนที่เบิกมาแพ็กมากกว่า 0")
-            elif (total_packed_output + waste_qty) > withdraw_qty: st.warning("⚠️ คำเตือน: ผลผลิตรวม + ของเสีย มากกว่าจำนวนที่เบิกมา")
+            c5, c6 = st.columns(2)
+            with c5: g3_type = st.selectbox("เกรดช่องที่ 3", grade_options, index=2)
+            with c6: g3_qty = st.number_input("จำนวนช่องที่ 3", min_value=0.0, step=0.1, key="g3")
 
-            remaining_wip_in_stock = max_wip_qty - withdraw_qty
-            new_status = "Packing done" if remaining_wip_in_stock <= 0 else "Pending Packing"
-            remaining_wip_in_stock = max(0.0, remaining_wip_in_stock)
+            c7, c8 = st.columns(2)
+            with c7: g4_type = st.selectbox("เกรดช่องที่ 4", grade_options, index=3)
+            with c8: g4_qty = st.number_input("จำนวนช่องที่ 4", min_value=0.0, step=0.1, key="g4")
 
-            cell_wip = sheet.find(str(selected_wip_lot))
-            matched_idx = cell_wip.row if cell_wip else int(df[df["THAI STICK Lot. No."].astype(str) == selected_wip_lot].index[0]) + 2
+            st.divider()
+            waste_qty = st.number_input("จำนวนของเสีย (Waste Qty)", min_value=0.0, step=0.1)
+            note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
 
-            latest_headers = sheet.row_values(1)
-            row_values = sheet.row_values(matched_idx)
-            while len(row_values) < len(latest_headers): row_values.append("")
+            if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลงตาราง Packing Records"):
+              total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
+              if withdraw_qty <= 0: st.error("❌ กรุณาระบุจำนวนที่เบิกมาแพ็กมากกว่า 0")
+              elif (total_packed_output + waste_qty) > withdraw_qty: st.warning("⚠️ คำเตือน: ผลผลิตรวม + ของเสีย มากกว่าจำนวนที่เบิกมา")
 
-            for idx, h in enumerate(latest_headers):
-              if h == "Quantity": row_values[idx] = str(remaining_wip_in_stock)
-              elif h == "Status": row_values[idx] = new_status
+              remaining_wip_in_stock = max_wip_qty - withdraw_qty
+              new_status = "Packing done" if remaining_wip_in_stock <= 0 else "Pending Packing"
+              remaining_wip_in_stock = max(0.0, remaining_wip_in_stock)
 
-            col_end_letter = chr(64 + len(latest_headers)).upper()
-            sheet.update(f"A{matched_idx}:{col_end_letter}{matched_idx}", [row_values])
+              # เปลี่ยนจากการ Search หา Lot ไปใช้บรรทัด matched_idx ที่เราล็อคเป้าไว้เลย แม่นยำกว่า
+              latest_headers = sheet.row_values(1)
+              row_values = sheet.row_values(matched_idx)
+              while len(row_values) < len(latest_headers): row_values.append("")
 
-            breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
-            log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            packing_sheet.append_row([log_time, selected_wip_lot, cultivar_val, packed_fg_name, breakdown_str, str(total_packed_output), str(waste_qty), packing_date_str, note])
+              for idx, h in enumerate(latest_headers):
+                if h == "Quantity": row_values[idx] = str(remaining_wip_in_stock)
+                elif h == "Status": row_values[idx] = new_status
 
-            fg_items = [(g1_type, g1_qty), (g2_type, g2_qty), (g3_type, g3_qty), (g4_type, g4_qty)]
-            created_count = 0
-            for idx_fg, (g_type, g_q) in enumerate(fg_items):
-              if g_q > 0:
-                created_count += 1
-                custom_fg_lot = f"{selected_wip_lot}-FG{created_count}-{g_type}"
-                packing_records_sheet.append_row([log_time, selected_wip_lot, cultivar_val, packed_fg_name, custom_fg_lot, g_type, str(g_q), str(waste_qty) if idx_fg == 0 else "0", packing_date_str, note])
+              col_end_letter = chr(64 + len(latest_headers)).upper()
+              sheet.update(f"A{matched_idx}:{col_end_letter}{matched_idx}", [row_values])
 
-            st.success(f"✅ บันทึกการแพ็กสำเร็จ! หัก WIP เหลือ {remaining_wip_in_stock:,.2f} และสร้าง Lot FG ใหม่จำนวน {created_count} รายการ 🎉")
+              breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
+              log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+              packing_sheet.append_row([log_time, selected_wip_lot, cultivar_val, packed_fg_name, breakdown_str, str(total_packed_output), str(waste_qty), packing_date_str, note])
+
+              fg_items = [(g1_type, g1_qty), (g2_type, g2_qty), (g3_type, g3_qty), (g4_type, g4_qty)]
+              created_count = 0
+              for idx_fg, (g_type, g_q) in enumerate(fg_items):
+                if g_q > 0:
+                  created_count += 1
+                  custom_fg_lot = f"{selected_wip_lot}-FG{created_count}-{g_type}"
+                  packing_records_sheet.append_row([log_time, selected_wip_lot, cultivar_val, packed_fg_name, custom_fg_lot, g_type, str(g_q), str(waste_qty) if idx_fg == 0 else "0", packing_date_str, note])
+
+              st.success(f"✅ บันทึกการแพ็กสำเร็จ! หัก WIP Size {wip_grade} เหลือ {remaining_wip_in_stock:,.2f} และสร้าง Lot FG ใหม่จำนวน {created_count} รายการ 🎉")
 
     st.divider()
     st.subheader("📑 ประวัติการผลิตและรหัส Lot FG แยกเกรด (Packing Records Sheet)")
