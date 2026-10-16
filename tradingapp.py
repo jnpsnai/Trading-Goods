@@ -480,79 +480,127 @@ elif menu == "📈 Monthly Report":
     pack_data = packing_records_sheet.get_all_records()
     df_pack_rep = pd.DataFrame(pack_data) if pack_data else pd.DataFrame()
 
-    has_wip_activity = False
-    has_fg_activity = False
-    wip_receive_total = 0.0
-    fg_receive_total = 0.0
+    # --- 1. สร้างระบบ Ledger (บัญชีแยกประเภท) เพื่อคำนวณย้อนหลังแบบ 100% Accuracy ---
+    events = []
+    lot_addbacks = {}
 
-    if not df_main_rep.empty:
-      df_main_rep.columns = [str(c).strip() for c in df_main_rep.columns]
-      for _, r in df_main_rep.iterrows():
-        cat = str(r.get("Category", ""))
-        # เผื่อไว้กรณีคุณยังไม่ได้เปลี่ยนชื่อหัวคอลัมน์ใน Sheet
-        rec_date = r.get("Receive date", r.get("Date receive", r.get("Date Receive", "")))
-        q = clean_quantity(r.get("Quantity", 0))
-        
-        # ใช้ฟังก์ชันใหม่ในการแปลงวันที่
-        p_dt = parse_robust_date(rec_date)
-        if pd.notna(p_dt):
-            if p_dt.year == selected_year and p_dt.month == selected_month_num:
-                if "WIP" in cat.upper():
-                    wip_receive_total += q
-                    has_wip_activity = True
-                elif "FG" in cat.upper():
-                    fg_receive_total += q
-                    has_fg_activity = True
+    # ก. ประมวลผลประวัติการส่งออก (Shipped Out)
+    if not df_shipped.empty:
+        for _, r in df_shipped.iterrows():
+            lot_no = str(r.get("Lot No.", "")).strip()
+            cat = str(r.get("Category", "")).lower()
+            qty = clean_quantity(r.get("Shipped Qty", 0))
+            s_date = str(r.get("Shipment Date", ""))
+            
+            lot_addbacks[lot_no] = lot_addbacks.get(lot_no, 0.0) + qty
+            events.append({"date": s_date, "type": "outbound", "cat": "wip" if "wip" in cat else "fg", "qty": qty})
 
+    # ข. ประมวลผลประวัติการแพ็ก (Packing Records)
     if not df_pack_rep.empty:
-      df_pack_rep.columns = [str(c).strip() for c in df_pack_rep.columns]
-      for _, r in df_pack_rep.iterrows():
-        p_date = r.get("Packing Date", "")
-        q = clean_quantity(r.get("Quantity", 0))
-        
-        # ใช้ฟังก์ชันใหม่ในการแปลงวันที่
-        p_dt = parse_robust_date(p_date)
-        if pd.notna(p_dt):
-            if p_dt.year == selected_year and p_dt.month == selected_month_num:
-                fg_receive_total += q
-                has_fg_activity = True
+        df_pack_rep.columns = [str(c).strip() for c in df_pack_rep.columns]
+        for _, r in df_pack_rep.iterrows():
+            wip_lot = str(r.get("Source WIP Lot", "")).strip()
+            qty = clean_quantity(r.get("Quantity", 0))
+            waste = clean_quantity(r.get("Waste Qty", 0))
+            p_date = str(r.get("Packing Date", ""))
+            
+            withdraw_qty = qty + waste
+            lot_addbacks[wip_lot] = lot_addbacks.get(wip_lot, 0.0) + withdraw_qty
+            
+            # WIP ถูกเบิกออกไปแพ็ก (นับเป็น Outbound ของ WIP)
+            events.append({"date": p_date, "type": "outbound", "cat": "wip", "qty": withdraw_qty})
+            # เกิดเป็น FG ตัวใหม่รับเข้าสต็อก (นับเป็น Inbound ของ FG)
+            events.append({"date": p_date, "type": "inbound", "cat": "fg", "qty": qty})
 
-    wip_shipped_monthly = 0.0
-    fg_shipped_monthly = 0.0
-    if not monthly_shipped.empty:
-      for _, r in monthly_shipped.iterrows():
-        cat = str(r.get("Category", ""))
-        sq = clean_quantity(r.get("Clean_Shipped_Qty", 0))
-        if "WIP" in cat:
-          wip_shipped_monthly += sq
-          has_wip_activity = True
-        else:
-          fg_shipped_monthly += sq
-          has_fg_activity = True
+    # ค. ประมวลผลข้อมูล Main Sheet (เพื่อหาจุดเริ่มต้น Original Qty)
+    if not df_main_rep.empty:
+        df_main_rep.columns = [str(c).strip() for c in df_main_rep.columns]
+        for _, r in df_main_rep.iterrows():
+            lot_no = str(r.get("THAI STICK Lot. No.", "")).strip()
+            if not lot_no:
+                lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+                
+            cat = str(r.get("Category", "")).lower()
+            curr_qty = clean_quantity(r.get("Quantity", 0))
+            rec_date = str(r.get("Receive date", r.get("Date receive", r.get("Date Receive", ""))))
+            
+            # จำนวนรับเข้าดั้งเดิม = จำนวนคงเหลือปัจจุบัน + จำนวนที่เคยถูกส่งออก/แพ็กไปแล้ว
+            original_qty = curr_qty + lot_addbacks.get(lot_no, 0.0)
+            events.append({"date": rec_date, "type": "inbound", "cat": "wip" if "wip" in cat else "fg", "qty": original_qty})
+
+    # --- 2. คำนวณยอดตามกรอบเวลา (Time Boundary) ---
+    month_start = pd.to_datetime(f"{selected_year}-{selected_month_num:02d}-01")
+    if selected_month_num == 12:
+        month_end = pd.to_datetime(f"{selected_year+1}-01-01")
+    else:
+        month_end = pd.to_datetime(f"{selected_year}-{selected_month_num+1:02d}-01")
+
+    wip_beginning = 0.0
+    fg_beginning = 0.0
+    wip_inbound = 0.0
+    fg_inbound = 0.0
+    wip_outbound = 0.0
+    fg_outbound = 0.0
+
+    for ev in events:
+        d = parse_robust_date(ev["date"])
+        if pd.isna(d): continue
+        
+        q = ev["qty"]
+        cat = ev["cat"]
+        
+        # 2.1 วันที่เกิดก่อนเดือนที่เลือก -> สะสมเป็น ยอดยกมา (Beginning Stock)
+        if d < month_start:
+            if ev["type"] == "inbound":
+                if cat == "wip": wip_beginning += q
+                else: fg_beginning += q
+            elif ev["type"] == "outbound":
+                if cat == "wip": wip_beginning -= q
+                else: fg_beginning -= q
+                
+        # 2.2 วันที่เกิดขึ้นในเดือนที่เลือก -> นับเป็น Inbound / Outbound ของเดือนนี้
+        elif month_start <= d < month_end:
+            if ev["type"] == "inbound":
+                if cat == "wip": wip_inbound += q
+                else: fg_inbound += q
+            elif ev["type"] == "outbound":
+                if cat == "wip": wip_outbound += q
+                else: fg_outbound += q
+
+    # ป้องกันเลขติดลบหลอกๆ จากเศษทศนิยม (Floating point)
+    wip_beginning = max(0.0, wip_beginning)
+    fg_beginning = max(0.0, fg_beginning)
+
+    wip_ending = max(0.0, wip_beginning + wip_inbound - wip_outbound)
+    fg_ending = max(0.0, fg_beginning + fg_inbound - fg_outbound)
+
+    has_wip_activity = (wip_inbound > 0) or (wip_outbound > 0) or (wip_beginning > 0)
+    has_fg_activity = (fg_inbound > 0) or (fg_outbound > 0) or (fg_beginning > 0)
 
     if not has_wip_activity:
-      st.warning(f"⚠️ **WIP:** ไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
+        st.warning(f"⚠️ **WIP:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
     if not has_fg_activity:
-      st.warning(f"⚠️ **FG:** ไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
+        st.warning(f"⚠️ **FG:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
 
     summary_report_data = [
         {
             "Category": "WIP (Work in Progress)",
-            "Status Activity": "🟢 Active" if has_wip_activity else "⚪ No Activity (นิ่ง)",
-            "Beginning Stock": max(0.0, wip_receive_total - wip_shipped_monthly),
-            "Received / Inbound": wip_receive_total,
-            "Shipped Out / Outbound": wip_shipped_monthly,
-            "Ending On-Hand Stock": max(0.0, wip_receive_total - wip_shipped_monthly),
+            "Status Activity": "🟢 Active" if (wip_inbound > 0 or wip_outbound > 0) else "⚪ No Activity (นิ่ง)",
+            "Beginning Stock (ยอดยกมา)": wip_beginning,
+            "Received / Inbound": wip_inbound,
+            "Shipped / Packed (Outbound)": wip_outbound,
+            "Ending On-Hand (คงเหลือสิ้นเดือน)": wip_ending,
         },
         {
             "Category": "FG (Finished Goods)",
-            "Status Activity": "🟢 Active" if has_fg_activity else "⚪ No Activity (นิ่ง)",
-            "Beginning Stock": max(0.0, fg_receive_total - fg_shipped_monthly),
-            "Received / Inbound": fg_receive_total,
-            "Shipped Out / Outbound": fg_shipped_monthly,
-            "Ending On-Hand Stock": max(0.0, fg_receive_total - fg_shipped_monthly),
+            "Status Activity": "🟢 Active" if (fg_inbound > 0 or fg_outbound > 0) else "⚪ No Activity (นิ่ง)",
+            "Beginning Stock (ยอดยกมา)": fg_beginning,
+            "Received / Inbound": fg_inbound,
+            "Shipped / Packed (Outbound)": fg_outbound,
+            "Ending On-Hand (คงเหลือสิ้นเดือน)": fg_ending,
         },
     ]
+    
     df_summary_rep = pd.DataFrame(summary_report_data)
     st.markdown("")
     st.dataframe(format_df_quantity(df_summary_rep), use_container_width=True)
