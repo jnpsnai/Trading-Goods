@@ -321,25 +321,34 @@ if menu == "🚨 Delivery Issue":
 
     import re # นำเข้าไลบรารีสกัดตัวเลขจากข้อความ
 
-    # --- 1. ตรวจสอบสถานะความพร้อม (Status OK/Wait Pack/Wait Receive) ---
-    # เช็คว่าชีตใช้ชื่อคอลัมน์ไหนระหว่าง Available FG หรือ Available FG Onhand
-    fg_col = "Available FG" if "Available FG" in df_del.columns else "Available FG Onhand"
-    wip_col = "Available WIP"
+    import re
 
-    if "Volume" in df_del.columns and fg_col in df_del.columns:
+    # --- 1. ตรวจสอบสถานะความพร้อม (Status OK/Wait Pack/Wait Receive) ---
+    # หาชื่อคอลัมน์แบบยืดหยุ่น ป้องกันปัญหาเคาะเว้นวรรค
+    vol_col = next((c for c in df_del.columns if "volume" in str(c).lower()), None)
+    fg_col = next((c for c in df_del.columns if "available fg" in str(c).lower()), None)
+    wip_col = next((c for c in df_del.columns if "available wip" in str(c).lower()), None)
+
+    if vol_col and fg_col:
         def check_readiness(row):
-            vol = clean_quantity(row.get("Volume", 0))
-            onhand = clean_quantity(row.get(fg_col, 0))
+            # ฟังก์ชันช่วยลบลูกน้ำ ช่องว่าง และแปลงเป็นตัวเลขเพื่อคำนวณ
+            def get_num(val):
+                try:
+                    return float(str(val).replace(",", "").strip())
+                except ValueError:
+                    return 0.0
+
+            vol = get_num(row.get(vol_col, 0))
+            onhand = get_num(row.get(fg_col, 0))
             
             # จัดการ Available WIP ที่เป็น Text (เช่น "BG: 30,000 | SM: 10,000")
-            wip_val = str(row.get(wip_col, "")).replace(",", "")
-            # สกัดหาตัวเลขทั้งหมดในข้อความ แล้วนำมาบวกกัน
+            wip_val = str(row.get(wip_col, "")).replace(",", "") if wip_col else "0"
             wip_numbers = re.findall(r"[-+]?\d*\.\d+|\d+", wip_val)
             total_wip = sum([float(n) for n in wip_numbers]) if wip_numbers else 0.0
 
             if vol > 0 and onhand >= vol:
                 return "✅ พร้อมส่ง"
-            elif total_wip > 0:
+            elif vol > 0 and total_wip > 0:
                 return "📦 รอแพ็ค"
             elif vol > 0:
                 return "📥 รอรับเข้าสินค้า"
