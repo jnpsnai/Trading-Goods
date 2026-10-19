@@ -686,7 +686,7 @@ elif menu == "📝 Trading Goods Registration":
           "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
           "Type": prod_type, "Status": status, "Packing date": "",
       }
-      # แทนที่คำสั่ง sheet.append_row(...) ด้วยโค้ดนี้ครับ
+# แทนที่คำสั่ง sheet.append_row(...) ด้วยโค้ดนี้ครับ
 new_data_row = [str(row_dict.get(h, "")) for h in latest_headers]
 
 # ดึงข้อมูลคอลัมน์ 1 (A) มานับว่ามีข้อมูลจริงๆ กี่บรรทัด แล้วบวก 1 เพื่อระบุบรรทัดถัดไป
