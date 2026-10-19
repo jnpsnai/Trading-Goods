@@ -1098,6 +1098,9 @@ elif menu == "📦 Packing Module":
             note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
 
             if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets"):
+              import time # นำเข้า module สำหรับหน่วงเวลา
+
+            if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets"):
               total_withdraw = sum(wip_withdrawals.values())
               total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
               
@@ -1106,61 +1109,73 @@ elif menu == "📦 Packing Module":
               elif (total_packed_output + waste_qty) > total_withdraw: 
                 st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
               else:
-                latest_headers = sheet.row_values(1)
-                combined_source_lots = []
-                
-                # 1. หักลบสต็อกต้นทาง (WIP) ทุกบรรทัดที่เลือก
-                for disp, w_qty in wip_withdrawals.items():
-                    if w_qty > 0:
-                        info = wip_map[disp]
-                        row_idx = info["row_idx"]
-                        lot_no = info["lot_no"]
-                        combined_source_lots.append(lot_no)
-                        
-                        row_values = sheet.row_values(row_idx)
-                        while len(row_values) < len(latest_headers): row_values.append("")
-                        
-                        remaining_wip = info["qty"] - w_qty
-                        new_status = "Packing done" if remaining_wip <= 0 else "Pending Packing"
-                        remaining_wip = max(0.0, remaining_wip)
-                        
-                        for idx, h in enumerate(latest_headers):
-                          # แปลงเป็น float เพื่อให้ลง Sheet เป็นตัวเลข
-                          if h == "Quantity": row_values[idx] = float(remaining_wip)
-                          elif h == "Status": row_values[idx] = new_status
-                        
-                        col_end_letter = chr(64 + len(latest_headers)).upper()
-                        # บันทึกด้วย USER_ENTERED เพื่อบังคับให้ Google Sheet อ่านเป็น Number Format
-                        sheet.update(f"A{row_idx}:{col_end_letter}{row_idx}", [row_values], value_input_option='USER_ENTERED')
-
-                source_lots_str = ", ".join(combined_source_lots)
-                if not source_lots_str: source_lots_str = "Mixed-Lots"
-                base_lot = combined_source_lots[0] if combined_source_lots else "TS-MIX"
-
-                breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
-                log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                # 2. บันทึกลง Packing_Log (ใช้ float และ USER_ENTERED)
-                packing_sheet.append_row([
-                    log_time, source_lots_str, default_fg_name, packed_fg_name, breakdown_str, 
-                    float(total_packed_output), float(waste_qty), packing_date_str, note
-                ], value_input_option='USER_ENTERED')
-
-                # 3. บันทึก FG ลง Packing_Records (ใช้ float และ USER_ENTERED)
-                fg_items = [(g1_type, g1_qty), (g2_type, g2_qty), (g3_type, g3_qty), (g4_type, g4_qty)]
-                created_count = 0
-                for idx_fg, (g_type, g_q) in enumerate(fg_items):
-                  if g_q > 0:
-                    created_count += 1
-                    custom_fg_lot = f"{base_lot}-FG{created_count}-{g_type}"
+                with st.spinner("⏳ กำลังบันทึกข้อมูล... (กรุณารอสักครู่และอย่าเพิ่งปิดหน้าต่างเพื่อป้องกัน API Error)"):
+                    latest_headers = sheet.row_values(1)
+                    combined_source_lots = []
                     
-                    packing_records_sheet.append_row([
-                        log_time, source_lots_str, default_fg_name, packed_fg_name, custom_fg_lot, 
-                        g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
-                    ], value_input_option='USER_ENTERED')
+                    # 1. หักลบสต็อกต้นทาง (WIP) ทุกบรรทัดที่เลือก
+                    for disp, w_qty in wip_withdrawals.items():
+                        if w_qty > 0:
+                            info = wip_map[disp]
+                            row_idx = info["row_idx"]
+                            lot_no = info["lot_no"]
+                            combined_source_lots.append(lot_no)
+                            
+                            row_values = sheet.row_values(row_idx)
+                            while len(row_values) < len(latest_headers): row_values.append("")
+                            
+                            remaining_wip = info["qty"] - w_qty
+                            new_status = "Packing done" if remaining_wip <= 0 else "Pending Packing"
+                            remaining_wip = max(0.0, remaining_wip)
+                            
+                            for idx, h in enumerate(latest_headers):
+                              if h == "Quantity": row_values[idx] = float(remaining_wip)
+                              elif h == "Status": row_values[idx] = new_status
+                            
+                            col_end_letter = chr(64 + len(latest_headers)).upper()
+                            sheet.update(f"A{row_idx}:{col_end_letter}{row_idx}", [row_values], value_input_option='USER_ENTERED')
+                            time.sleep(1) # 🛑 ชะลอ API ป้องกัน Rate Limit Error
 
-                st.success(f"✅ บันทึกสำเร็จ! นำ WIP จำนวน {total_withdraw:,.2f} g ไปแพ็ก และสร้าง Lot FG ใหม่ {created_count} รายการ 🎉")
-                st.rerun() # รีเฟรชหน้าเพื่อเคลียร์ค่าที่กรอกทั้งหมดและดึงสต็อกใหม่ทันที
+                    source_lots_str = ", ".join(combined_source_lots)
+                    if not source_lots_str: source_lots_str = "Mixed-Lots"
+                    base_lot = combined_source_lots[0] if combined_source_lots else "TS-MIX"
+
+                    breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
+                    log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # 2. บันทึกลง Packing_Log (แก้ปัญหาเด้งไปบรรทัดล่างสุด)
+                    packing_log_row = [
+                        log_time, source_lots_str, default_fg_name, packed_fg_name, breakdown_str, 
+                        float(total_packed_output), float(waste_qty), packing_date_str, note
+                    ]
+                    
+                    # นับบรรทัดที่มีข้อมูลจริงๆ ในคอลัมน์ A แล้วต่อท้าย
+                    next_pack_row = len(packing_sheet.col_values(1)) + 1
+                    packing_sheet.update(f"A{next_pack_row}", [packing_log_row], value_input_option='USER_ENTERED')
+                    time.sleep(1) # 🛑 ชะลอ API
+
+                    # 3. บันทึก FG ลง Packing_Records (แก้ปัญหาเด้งไปบรรทัดล่างสุด)
+                    fg_items = [(g1_type, g1_qty), (g2_type, g2_qty), (g3_type, g3_qty), (g4_type, g4_qty)]
+                    created_count = 0
+                    
+                    # นับบรรทัดที่มีข้อมูลจริงๆ ในคอลัมน์ A ของ Packing Records
+                    next_rec_row = len(packing_records_sheet.col_values(1)) + 1
+                    for idx_fg, (g_type, g_q) in enumerate(fg_items):
+                      if g_q > 0:
+                        created_count += 1
+                        custom_fg_lot = f"{base_lot}-FG{created_count}-{g_type}"
+                        
+                        rec_row = [
+                            log_time, source_lots_str, default_fg_name, packed_fg_name, custom_fg_lot, 
+                            g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
+                        ]
+                        packing_records_sheet.update(f"A{next_rec_row}", [rec_row], value_input_option='USER_ENTERED')
+                        next_rec_row += 1
+                        time.sleep(1) # 🛑 ชะลอ API
+
+                    st.success(f"✅ บันทึกสำเร็จ! นำ WIP จำนวน {total_withdraw:,.2f} g ไปแพ็ก และสร้าง Lot FG ใหม่ {created_count} รายการ 🎉")
+                    time.sleep(1)
+                    st.rerun() # รีเฟรชหน้าเพื่อเคลียร์ค่าทั้งหมด
 
     st.divider()
     st.subheader("📑 ประวัติการผลิตและรหัส Lot FG แยกเกรด (Packing Records Sheet)")
