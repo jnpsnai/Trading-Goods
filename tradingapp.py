@@ -291,10 +291,26 @@ if menu == "🚨 Delivery Issue":
 
   try:
     del_sheet = sh.worksheet("Delivery_schedule")
-    data_del = del_sheet.get_all_records()
+    
+    # 🛠️ เปลี่ยนมาใช้ get_all_values() เพื่อป้องกัน GSpreadException 100%
+    raw_del_rows = del_sheet.get_all_values()
+    if raw_del_rows and len(raw_del_rows) > 1:
+        headers = [str(h).strip() for h in raw_del_rows[0]]
+        data_del = []
+        for r in raw_del_rows[1:]:
+            while len(r) < len(headers):
+                r.append("")
+            data_del.append({headers[i]: r[i] for i in range(len(headers))})
+    else:
+        data_del = []
+        
     df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
+    
   except gspread.exceptions.WorksheetNotFound:
     st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
+    df_del = pd.DataFrame()
+  except Exception as e:
+    st.error(f"❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
     df_del = pd.DataFrame()
 
   if not df_del.empty:
