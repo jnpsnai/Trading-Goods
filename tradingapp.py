@@ -833,27 +833,50 @@ elif menu == "📝 Trading Goods Registration":
           ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"],
       )
       
+    # ---------------------------------------------------------
+    # 1. สร้างฟังก์ชัน Cache ไว้ด้านบนก่อนเรียกใช้
+    # (ระบบจะจำข้อมูลไว้ 30 วินาที ช่วยประหยัดโควตา API ได้มหาศาล)
+    # ---------------------------------------------------------
+    @st.cache_data(ttl=30)
+    def get_cached_data(_sheet):
+        return _sheet.get_all_records()
+
     submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
     if submitted:
         latest_headers = sheet.row_values(1)
         row_dict = {
             "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
             "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
-            "Receive date": receive_date_str, "Quantity": str(quantity), "Remark Qty": remark_qty,
+            "Receive date": receive_date_str, 
+            "Quantity": float(quantity), # แก้จาก str เป็น float เพื่อให้ลงเป็นตัวเลข
+            "Remark Qty": remark_qty,
             "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
             "Type": prod_type, "Status": status, "Packing date": "",
         }
         
         sheet.append_row(
-            [str(row_dict.get(h, "")) for h in latest_headers],
-            table_range="A1"
+            [row_dict.get(h, "") for h in latest_headers],
+            table_range="A1",
+            value_input_option='USER_ENTERED' # บังคับให้ Google Sheets อ่านค่าเป็นตัวเลข
         )
+        
+        # ---------------------------------------------------------
+        # 2. สั่งล้างความจำ Cache ทันทีที่มีการบันทึกข้อมูลใหม่
+        # เพื่อให้ตารางด้านล่างอัปเดตข้อมูลล่าสุดทันที
+        # ---------------------------------------------------------
+        get_cached_data.clear() 
+
         st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
         st.rerun()
 
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
-  data = sheet.get_all_records()
+  
+  # ---------------------------------------------------------
+  # 3. เปลี่ยนจากการยิง API ตรงๆ มาเป็นการดึงข้อมูลผ่านฟังก์ชัน Cache
+  # ---------------------------------------------------------
+  data = get_cached_data(sheet)
+  
   if data: st.dataframe(format_df_quantity(pd.DataFrame(data)), use_container_width=True)
   else: st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
 
