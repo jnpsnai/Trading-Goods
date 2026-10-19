@@ -1144,7 +1144,7 @@ elif menu == "📦 Packing Module":
             note = st.text_area("หมายเหตุเพิ่มเติม (Note)", key="note_pack")
 
             # จุดที่ต้องระวังย่อหน้าให้อยู่ระดับเดียวกันกับตัวแปรด้านบน
-            if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets", key="packing_submit_btn"):
+           if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets", key="packing_submit_btn"):
               total_withdraw = sum(wip_withdrawals.values())
               total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
               
@@ -1154,7 +1154,6 @@ elif menu == "📦 Packing Module":
                 st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
               else:
                 with st.spinner("⏳ กำลังบันทึกข้อมูล... (กรุณารอสักครู่และอย่าเพิ่งปิดหน้าต่าง)"):
-                    # ประกาศตัวแปรและดึงข้อมูล Header ไว้ล่วงหน้าตรงนี้
                     latest_headers = sheet.row_values(1)
                     col_end_letter = chr(64 + len(latest_headers)).upper()
                     combined_source_lots = [] 
@@ -1165,7 +1164,7 @@ elif menu == "📦 Packing Module":
                             info = wip_map[disp]
                             row_idx = info["row_idx"]
                             lot_no = info["lot_no"]
-                            combined_source_lots.append(lot_no) # เก็บ Lot ลงในลิสต์
+                            combined_source_lots.append(lot_no)
                             
                             row_values = sheet.row_values(row_idx)
                             while len(row_values) < len(latest_headers): row_values.append("")
@@ -1178,8 +1177,13 @@ elif menu == "📦 Packing Module":
                               if h == "Quantity": row_values[idx] = float(remaining_wip)
                               elif h == "Status": row_values[idx] = new_status
                             
-                            sheet.update(f"A{row_idx}:{col_end_letter}{row_idx}", [row_values], value_input_option='USER_ENTERED')
-                            time.sleep(1) # ชะลอ API ป้องกัน Rate Limit Error
+                            # ใช้ range_name และ values แบบระบุชื่อชัดเจน ป้องกัน API Error
+                            sheet.update(
+                                range_name=f"A{row_idx}:{col_end_letter}{row_idx}", 
+                                values=[row_values], 
+                                value_input_option='USER_ENTERED'
+                            )
+                            time.sleep(1)
 
                     source_lots_str = ", ".join(combined_source_lots)
                     if not source_lots_str: source_lots_str = "Mixed-Lots"
@@ -1194,7 +1198,12 @@ elif menu == "📦 Packing Module":
                         float(total_packed_output), float(waste_qty), packing_date_str, note
                     ]
                     next_pack_row = len(packing_sheet.col_values(1)) + 1
-                    packing_sheet.update(f"A{next_pack_row}", [packing_log_row], value_input_option='USER_ENTERED')
+                    
+                    packing_sheet.update(
+                        range_name=f"A{next_pack_row}", 
+                        values=[packing_log_row], 
+                        value_input_option='USER_ENTERED'
+                    )
                     time.sleep(1)
 
                     # 3. บันทึก FG ลง Packing_Records
@@ -1211,7 +1220,12 @@ elif menu == "📦 Packing Module":
                             log_time, source_lots_str, default_fg_name, packed_fg_name, custom_fg_lot, 
                             g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
                         ]
-                        packing_records_sheet.update(f"A{next_rec_row}", [rec_row], value_input_option='USER_ENTERED')
+                        
+                        packing_records_sheet.update(
+                            range_name=f"A{next_rec_row}", 
+                            values=[rec_row], 
+                            value_input_option='USER_ENTERED'
+                        )
                         next_rec_row += 1
                         time.sleep(1)
 
