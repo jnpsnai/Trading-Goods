@@ -4,6 +4,13 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import streamlit as st
+    # ---------------------------------------------------------
+    # 1. สร้างฟังก์ชัน Cache ไว้ด้านบนก่อนเรียกใช้
+    # (ระบบจะจำข้อมูลไว้ 30 วินาที ช่วยประหยัดโควตา API ได้มหาศาล)
+    # ---------------------------------------------------------
+    @st.cache_data(ttl=30)
+    def get_cached_data(_sheet):
+        return _sheet.get_all_records()
 
 # --- 1. ตั้งค่าหน้าเว็บ Streamlit ให้เป็น Wide Mode ---
 st.set_page_config(
@@ -838,14 +845,6 @@ elif menu == "📝 Trading Goods Registration":
           ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"],
       )
       
-    # ---------------------------------------------------------
-    # 1. สร้างฟังก์ชัน Cache ไว้ด้านบนก่อนเรียกใช้
-    # (ระบบจะจำข้อมูลไว้ 30 วินาที ช่วยประหยัดโควตา API ได้มหาศาล)
-    # ---------------------------------------------------------
-    @st.cache_data(ttl=30)
-    def get_cached_data(_sheet):
-        return _sheet.get_all_records()
-
     submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
     if submitted:
         latest_headers = sheet.row_values(1)
