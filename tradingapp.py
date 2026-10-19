@@ -194,18 +194,17 @@ def clean_quantity(val):
     return 0.0
 
 def format_df_quantity(df):
-  """ฟังก์ชันใส่ลูกน้ำ (,) ให้หลักพัน สำหรับคอลัมน์ที่เป็นตัวเลขทั้งหมด (ยกเว้นรหัส Lot หรือปี)"""
+  """ฟังก์ชันใส่ลูกน้ำ (,) ให้หลักพัน สำหรับคอลัมน์ที่เป็นตัวเลขและ Volume (ยกเว้นรหัส Lot หรือปี)"""
   if df is not None and not df.empty:
     df_copy = df.copy()
     for col in df_copy.columns:
       col_str = str(col).lower()
       
-      # คีย์เวิร์ดคอลัมน์ตัวเลขที่ต้องการฟอร์แมต
-      keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า"]
+      # เพิ่มคีย์เวิร์ด volume และปริมาณ เข้าไปให้ระบบดักจับ
+      keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ"]
       is_target_col = any(k in col_str for k in keywords)
       is_numeric_type = pd.api.types.is_numeric_dtype(df_copy[col]) and not pd.api.types.is_bool_dtype(df_copy[col])
       
-      # คีย์เวิร์ดคอลัมน์ที่ไม่ต้องการให้ใส่ลูกน้ำ (เช่น Lot, ID, Year)
       ignore_kws = ["year", "ปี", "lot", "id", "เลข", "no.", "รหัส"]
       is_ignore = any(ig in col_str for ig in ignore_kws)
       
@@ -214,7 +213,6 @@ def format_df_quantity(df):
           try:
             if pd.isna(x) or x == "": return x
             val = float(x)
-            # ถ้าเป็นเลขจำนวนเต็มให้โชว์ไม่มีทศนิยม ถ้ามีทศนิยมให้โชว์ 2 ตำแหน่ง
             return f"{val:,.2f}" if val % 1 != 0 else f"{int(val):,}"
           except:
             return x
@@ -223,32 +221,106 @@ def format_df_quantity(df):
   return df
 
 # ==========================================
-# หน้าที่ 1: Delivery Issue
+# หน้าที่ 1: Delivery Issue (อัปเกรด Status, Color Urgency, Reschedule & Direct Link)
 # ==========================================
 if menu == "🚨 Delivery Issue":
-  st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
-  st.markdown(
-      "แสดงรายการกำหนดการจัดส่งสินค้า (ข้อมูลดึงจากแท็บ **Delivery_schedule** โดยตรง)"
-  )
+  # แบ่งหน้าจอ 2 ฝั่ง ซ้าย=หัวข้อ ขวา=ปุ่มทางลัด Google Sheets
+  col_head1, col_head2 = st.columns([7, 3])
+  with col_head1:
+    st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
+    st.markdown("แสดงรายการและสถานะความพร้อมในการจัดส่ง (ดึงจากแท็บ **Delivery_schedule**)")
+  
+  with col_head2:
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("🔗 Direct Google Sheets (Delivery_schedule)"):
+      pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del", placeholder="กรอกรหัสผ่านเพื่อแสดงลิงก์")
+      if pwd == "tstd":
+        # คุณสามารถเปลี่ยนลิงก์ตรงนี้โดยเอาพารามิเตอร์ gid=... ของแท็บ Delivery_schedule มาใส่แทนได้ครับ เพื่อให้คลิกแล้วเด้งเข้าแท็บนั้นเลย
+        st.markdown("[🟢 **คลิกที่นี่เพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
+      elif pwd != "":
+        st.error("รหัสผ่านไม่ถูกต้อง ❌")
 
   try:
     del_sheet = sh.worksheet("Delivery_schedule")
     data_del = del_sheet.get_all_records()
     df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
   except gspread.exceptions.WorksheetNotFound:
-    st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets (กรุณาตรวจสอบชื่อแท็บครับ)")
+    st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
     df_del = pd.DataFrame()
 
   if not df_del.empty:
     df_del.columns = [str(c).strip() for c in df_del.columns]
+    
+    # เก็บเลขบรรทัดไว้ใช้อัปเดตวันจัดส่ง (Index 0 ของ Pandas = Row 2 ใน Sheets)
+    df_del["Original_Row_Index"] = df_del.index + 2
 
+    # --- 1. ตรวจสอบสถานะความพร้อม (Status OK/Not Ready) ---
+    if "Volume" in df_del.columns and "Available FG Onhand" in df_del.columns:
+        def check_readiness(row):
+            vol = clean_quantity(row.get("Volume", 0))
+            onhand = clean_quantity(row.get("Available FG Onhand", 0))
+            if vol > 0 and onhand >= vol:
+                return "✅ พร้อมส่ง"
+            elif vol > 0:
+                return "❌ รอสินค้า"
+            else:
+                return "➖ N/A"
+        df_del["Status (ความพร้อม)"] = df_del.apply(check_readiness, axis=1)
+
+    # --- 2. ค้นหาคอลัมน์วันที่ ---
     date_col = None
-    possible_date_cols = ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date", "วันที่ส่ง", "วันที่จัดส่ง"]
+    possible_date_cols = ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date"]
     for col in possible_date_cols:
         if col in df_del.columns:
             date_col = col
             break
 
+    # --- 3. UI ฟอร์มปรับเปลี่ยนวันจัดส่ง (Reschedule) วางไว้ด้านบนให้หาง่ายๆ ---
+    with st.expander("✏️ เลื่อน/ปรับเปลี่ยนกำหนดการจัดส่ง (Reschedule)"):
+        with st.form("reschedule_form"):
+            st.markdown("เลือกรายการที่เลยกำหนด หรือต้องการเลื่อนวันส่ง เพื่ออัปเดตลง Google Sheets")
+            
+            reschedule_opts = []
+            reschedule_map = {}
+            for _, r in df_del.iterrows():
+                row_idx = r["Original_Row_Index"]
+                curr_dt = str(r.get(date_col, "")) if date_col else ""
+                vol = r.get("Volume", 0)
+                
+                # พยายามหาชื่อสินค้ามาโชว์ใน Dropdown
+                name_kws = ["Cultivar Name", "Export Name", "Product", "ชื่อ", "Item"]
+                item_name = "Unknown Item"
+                for nk in name_kws:
+                    if nk in df_del.columns and str(r.get(nk, "")).strip():
+                        item_name = str(r.get(nk, ""))
+                        break
+                        
+                disp_txt = f"บรรทัด {row_idx} | สินค้า: {item_name} | วันเดิม: {curr_dt} | Volume: {vol}"
+                reschedule_opts.append(disp_txt)
+                reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt}
+                
+            selected_item = st.selectbox("เลือกรายการที่ต้องการแก้ไข", ["-- กรุณาเลือก --"] + reschedule_opts)
+            new_date = st.date_input("กำหนดการใหม่ (New Expected Date)", value=date.today())
+            
+            if st.form_submit_button("💾 บันทึกกำหนดการใหม่"):
+                if selected_item == "-- กรุณาเลือก --":
+                    st.error("กรุณาเลือกรายการก่อนทำการบันทึก")
+                elif date_col:
+                    headers = del_sheet.row_values(1)
+                    if date_col in headers:
+                        col_idx = headers.index(date_col) + 1 # +1 เพราะ Google Sheet นับเริ่มที่ 1
+                        target_row = reschedule_map[selected_item]["row_idx"]
+                        
+                        # ยิง API ไปแก้ไขเฉพาะ Cell นั้นใน Google Sheets
+                        del_sheet.update_cell(target_row, col_idx, str(new_date))
+                        st.success(f"✅ อัปเดตวันจัดส่งใหม่เป็น {new_date} สำหรับรายการบรรทัดที่ {target_row} เรียบร้อยแล้ว!")
+                        st.rerun() # รีเฟรชหน้าเว็บเพื่อดึงข้อมูลใหม่
+                    else:
+                        st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
+
+    st.divider()
+
+    # --- 4. จัดกลุ่มตารางตามวันและแสดงผลสีตาม Urgency ---
     if date_col:
         df_del[date_col] = df_del[date_col].astype(str).str.strip()
         df_del["Is_TBD"] = df_del[date_col].str.lower().isin(["to be decided", "tbd", "", "nan", "nat", "none"])
@@ -259,41 +331,55 @@ if menu == "🚨 Delivery Issue":
         dated_df = dated_df.sort_values(by=date_col, ascending=True)
         unique_dates = dated_df[date_col].unique()
 
-        color_palette = ["#4fd1c5", "#68d391", "#63b3ed", "#b794f4", "#f687b3", "#fc8181", "#fbd38d"]
-
-        for idx, d_date in enumerate(unique_dates):
+        for d_date in unique_dates:
             sub_df = dated_df[dated_df[date_col] == d_date]
-            sub_display = sub_df.drop(columns=["Is_TBD"], errors="ignore")
+            sub_display = sub_df.drop(columns=["Is_TBD", "Original_Row_Index"], errors="ignore")
             
-            # --- ส่วนคำนวณหาวันในสัปดาห์ และ นับจำนวนวันถอยหลัง ---
-            date_display = str(d_date)
+            # คำนวณความเร่งด่วน
             parsed_d = pd.to_datetime(d_date, dayfirst=True, errors='coerce')
+            date_display = str(d_date)
             
             if pd.notna(parsed_d):
                 thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
-                thai_day_str = thai_days[parsed_d.weekday()] # หาวัน จ-อา
+                thai_day_str = thai_days[parsed_d.weekday()]
+                diff_days = (parsed_d.date() - date.today()).days
                 
-                diff_days = (parsed_d.date() - date.today()).days # คำนวณส่วนต่างกับวันนี้
-                
-                if diff_days > 0:
-                    diff_text = f"อีก {diff_days} วัน"
+                # กำหนดสี Pastel แบบสบายตา แบ่งตามความเร่งด่วน (Urgency)
+                if diff_days < 0:
+                    diff_text = f"เลยกำหนดมาแล้ว {abs(diff_days)} วัน"
+                    bg_color = "#fecaca" # Pastel Red
+                    border_color = "#f87171"
+                    text_color = "#7f1d1d"
+                    urgency_icon = "🚨"
                 elif diff_days == 0:
                     diff_text = "วันนี้"
+                    bg_color = "#fed7aa" # Pastel Orange
+                    border_color = "#fb923c"
+                    text_color = "#7c2d12"
+                    urgency_icon = "🔥"
+                elif diff_days <= 3:
+                    diff_text = f"อีก {diff_days} วัน"
+                    bg_color = "#fef08a" # Pastel Yellow
+                    border_color = "#facc15"
+                    text_color = "#713f12"
+                    urgency_icon = "⚠️"
                 else:
-                    diff_text = f"ผ่านมาแล้ว {abs(diff_days)} วัน"
+                    diff_text = f"อีก {diff_days} วัน"
+                    bg_color = "#bbf7d0" # Pastel Green
+                    border_color = "#4ade80"
+                    text_color = "#14532d"
+                    urgency_icon = "📅"
                     
-                # รวมข้อความให้เป็นรูปแบบที่สวยงาม
-                date_display = f"วัน{thai_day_str}ที่ {d_date} ({diff_text})"
-            # --------------------------------------------------
+                date_display = f"{urgency_icon} กำหนดส่ง: วัน{thai_day_str}ที่ {d_date} ({diff_text})"
+            else:
+                bg_color, border_color, text_color = "#e2e8f0", "#a0aec0", "#2d3748"
 
-            bg_color = color_palette[idx % len(color_palette)]
-            
             st.markdown(
                 f"""
-                <div style="background-color: {bg_color}; color: #1a202c; padding: 15px 20px; 
+                <div style="background-color: {bg_color}; color: {text_color}; padding: 15px 20px; 
                 border-radius: 8px; margin-top: 20px; margin-bottom: 12px; font-weight: bold; font-size: 22px; 
-                border-left: 6px solid rgba(0,0,0,0.2);">
-                    📅 กำหนดส่ง: {date_display}
+                border-left: 8px solid {border_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+                    {date_display}
                 </div>
                 """,
                 unsafe_allow_html=True
@@ -301,12 +387,12 @@ if menu == "🚨 Delivery Issue":
             st.dataframe(format_df_quantity(sub_display), use_container_width=True)
 
         if not tbd_df.empty:
-            tbd_display = tbd_df.drop(columns=["Is_TBD"], errors="ignore")
+            tbd_display = tbd_df.drop(columns=["Is_TBD", "Original_Row_Index"], errors="ignore")
             st.markdown(
                 f"""
-                <div style="background-color: #cbd5e0; color: #1a202c; padding: 15px 20px; 
+                <div style="background-color: #f1f5f9; color: #334155; padding: 15px 20px; 
                 border-radius: 8px; margin-top: 30px; margin-bottom: 12px; font-weight: bold; font-size: 22px;
-                border-left: 6px solid #718096;">
+                border-left: 8px solid #94a3b8; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
                     ⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ)
                 </div>
                 """,
@@ -314,10 +400,10 @@ if menu == "🚨 Delivery Issue":
             )
             st.dataframe(format_df_quantity(tbd_display), use_container_width=True)
     else:
-        st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้ ระบบจึงแสดงข้อมูลทั้งหมดรวมกัน")
-        st.dataframe(format_df_quantity(df_del), use_container_width=True)
+        st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้")
+        st.dataframe(format_df_quantity(df_del.drop(columns=["Original_Row_Index"], errors="ignore")), use_container_width=True)
   else:
-    st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule' หรือค้นหาแท็บไม่พบ")
+    st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule'")
 
 # ==========================================
 # หน้าที่ 2: Stock Summary & Details
