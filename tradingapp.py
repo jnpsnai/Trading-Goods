@@ -858,10 +858,17 @@ elif menu == "📝 Trading Goods Registration":
             "Type": prod_type, "Status": status, "Packing date": "",
         }
         
-        # 🛠️ แก้ไขโดยการเอา table_range="A1" ออก ปล่อยให้ระบบต่อท้ายแถวให้อัตโนมัติ
-        sheet.append_row(
-            [row_dict.get(h, "") for h in latest_headers],
-            value_input_option='USER_ENTERED' # บังคับให้ Google Sheets อ่านค่าเป็นตัวเลข
+        # จัดเรียงข้อมูลให้ตรงกับหัวคอลัมน์เป๊ะๆ
+        row_to_insert = [row_dict.get(h, "") for h in latest_headers]
+        
+        # 🛠️ ใช้เทคนิคนับจำนวนแถวที่มีข้อมูลจริงในคอลัมน์ A แล้วบวก 1 เพื่อลงบรรทัดใหม่ถัดไปชัวร์ๆ
+        next_row = len(sheet.col_values(1)) + 1
+        col_end_letter = chr(64 + len(latest_headers)).upper()
+        
+        sheet.update(
+            range_name=f"A{next_row}:{col_end_letter}{next_row}", 
+            values=[row_to_insert], 
+            value_input_option='USER_ENTERED'
         )
         
         # ล้างความจำ Cache เพื่อดึงข้อมูลใหม่มาแสดงทันที
@@ -873,13 +880,13 @@ elif menu == "📝 Trading Goods Registration":
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
   
-  # ---------------------------------------------------------
-  # 3. เปลี่ยนจากการยิง API ตรงๆ มาเป็นการดึงข้อมูลผ่านฟังก์ชัน Cache
-  # ---------------------------------------------------------
+  # ดึงข้อมูลผ่านฟังก์ชัน Cache ที่ย้ายไปอยู่ด้านบนสุดของไฟล์
   data = get_cached_data(sheet)
   
-  if data: st.dataframe(format_df_quantity(pd.DataFrame(data)), use_container_width=True)
-  else: st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
+  if data: 
+      st.dataframe(format_df_quantity(pd.DataFrame(data)), use_container_width=True)
+  else: 
+      st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
 
 # ==========================================
 # หน้าที่ 5: Edit Registration
