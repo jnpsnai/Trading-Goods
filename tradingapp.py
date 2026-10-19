@@ -75,22 +75,29 @@ st.markdown(
 )
 
 # --- 3. ฟังก์ชันเชื่อมต่อ Google Sheets และตรวจสอบ Header อัตโนมัติ ---
-@st.cache_resource
-def init_connection():
-  scope = [
-      "https://spreadsheets.google.com/feeds",
-      "https://www.googleapis.com/auth/drive",
-  ]
-  creds_dict = dict(st.secrets["gcp_service_account"])
-  creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-  client = gspread.authorize(creds)
-  return client
-
-client = init_connection()
 SHEET_NAME = "Trading Data Log"
 
-sh = client.open(SHEET_NAME)
+@st.cache_resource
+def get_gsheet_connection(sheet_name):
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds_dict = dict(st.secrets["gcp_service_account"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+    
+    # ย้ายคำสั่งที่กินโควตา API (การเปิดไฟล์) เข้ามาไว้ใน Cache
+    sh = client.open(sheet_name)
+    return client, sh
+
+# เรียกใช้ฟังก์ชันเดียว ได้กลับมาทั้ง client และ sh ที่ถูก Cache ไว้แล้ว
+client, sh = get_gsheet_connection(SHEET_NAME)
+
+# หลังจากนี้การดึง Worksheet จะไม่เสียโควตา API เพิ่มแล้ว
 sheet = sh.get_worksheet(0)
+
+# (หากมี sheet อื่นๆ เช่น Delivery หรือ Packing ก็สามารถดึงต่อจาก sh ได้เลย)
 
 # กำหนดโครงสร้าง Column Header
 EXPECTED_HEADERS = [
