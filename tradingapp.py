@@ -1151,6 +1151,9 @@ elif menu == "📦 Packing Module":
                         col_end_letter = chr(64 + len(latest_headers)).upper()
                         combined_source_lots = [] 
                         
+                        # [เทคนิคใหม่] ดึงข้อมูลทั้งหมดของชีตมาเก็บไว้ใน Python ครั้งเดียวจบ ไม่เปลือง API โควตา
+                        all_sheet_rows = sheet.get_all_values()
+                        
                         # 1. หักลบสต็อกต้นทาง (WIP) ทุกบรรทัดที่เลือก
                         for disp, w_qty in wip_withdrawals.items():
                             if w_qty > 0:
@@ -1159,16 +1162,20 @@ elif menu == "📦 Packing Module":
                                 lot_no = info["lot_no"]
                                 combined_source_lots.append(lot_no)
                                 
-                                row_values = sheet.row_values(row_idx)
-                                while len(row_values) < len(latest_headers): row_values.append("")
+                                # ดึงข้อมูลแถวนี้จากตัวแปรที่โหลดมาแล้ว (แถวใน Google Sheets เริ่มที่ 1 แต่ Index ใน Python เริ่มที่ 0 จึงต้องลบ 1)
+                                row_values = list(all_sheet_rows[row_idx - 1])
+                                while len(row_values) < len(latest_headers): 
+                                    row_values.append("")
                                 
                                 remaining_wip = info["qty"] - w_qty
                                 new_status = "Packing done" if remaining_wip <= 0 else "Pending Packing"
                                 remaining_wip = max(0.0, remaining_wip)
                                 
                                 for idx, h in enumerate(latest_headers):
-                                    if h == "Quantity": row_values[idx] = float(remaining_wip)
-                                    elif h == "Status": row_values[idx] = new_status
+                                    if h == "Quantity": 
+                                        row_values[idx] = float(remaining_wip)
+                                    elif h == "Status": 
+                                        row_values[idx] = new_status
                                 
                                 sheet.update(
                                     range_name=f"A{row_idx}:{col_end_letter}{row_idx}", 
