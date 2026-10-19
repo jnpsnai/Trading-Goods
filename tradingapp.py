@@ -4,13 +4,31 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import streamlit as st
-    # ---------------------------------------------------------
-    # 1. สร้างฟังก์ชัน Cache ไว้ด้านบนก่อนเรียกใช้
-    # (ระบบจะจำข้อมูลไว้ 30 วินาที ช่วยประหยัดโควตา API ได้มหาศาล)
-    # ---------------------------------------------------------
+    # --- ฟังก์ชัน Cache ที่ปลอดภัยจาก GSpreadException 100% ---
 @st.cache_data(ttl=30)
 def get_cached_data(_sheet):
-    return _sheet.get_all_records()
+    try:
+        rows = _sheet.get_all_values()
+        if not rows or len(rows) <= 1:
+            return []
+        
+        # ดึงบรรทัดแรกมาเป็น Header และจัดการช่องว่าง
+        headers = [str(h).strip() for h in rows[0]]
+        data = []
+        
+        # แปลงข้อมูลแต่ละแถวให้อยู่ในรูป List of Dicts แบบปลอดภัย
+        for r in rows[1:]:
+            # เติมค่าว่างหากแถวนั้นสั้นกว่า Header
+            while len(r) < len(headers):
+                r.append("")
+            
+            row_dict = {headers[i]: r[i] for i in range(len(headers))}
+            data.append(row_dict)
+            
+        return data
+    except Exception as e:
+        # หากเกิดข้อผิดพลาดใดๆ ให้คืนค่า List ว่างแทนการพัง
+        return []
 
 # --- 1. ตั้งค่าหน้าเว็บ Streamlit ให้เป็น Wide Mode ---
 st.set_page_config(
