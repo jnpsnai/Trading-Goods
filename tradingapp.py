@@ -686,7 +686,16 @@ elif menu == "📝 Trading Goods Registration":
           "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
           "Type": prod_type, "Status": status, "Packing date": "",
       }
-      sheet.append_row([str(row_dict.get(h, "")) for h in latest_headers])
+      # แทนที่คำสั่ง sheet.append_row(...) ด้วยโค้ดนี้ครับ
+new_data_row = [str(row_dict.get(h, "")) for h in latest_headers]
+
+# ดึงข้อมูลคอลัมน์ 1 (A) มานับว่ามีข้อมูลจริงๆ กี่บรรทัด แล้วบวก 1 เพื่อระบุบรรทัดถัดไป
+col_a_data = sheet.col_values(1) 
+next_row = len(col_a_data) + 1 
+
+# อัปเดตข้อมูลลงไปตรงๆ ในบรรทัดนั้น
+col_end_letter = chr(64 + len(latest_headers)).upper()
+sheet.update(f"A{next_row}:{col_end_letter}{next_row}", [new_data_row])
       st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
       st.rerun()
 
