@@ -204,72 +204,80 @@ def format_df_quantity(df):
   return df
 
 # ==========================================
-# หน้าที่ 1: Delivery Issue
+# หน้าที่ 1: Delivery Issue (อัปเดตดึงจากแท็บ Delivery_schedule)
 # ==========================================
 if menu == "🚨 Delivery Issue":
   st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
   st.markdown(
-      "แสดงรายการสินค้าที่มีกำหนดส่ง (Shipment Date) โดยจัดกลุ่มตามวันจัดส่งอย่างชัดเจน"
+      "แสดงรายการกำหนดการจัดส่งสินค้า (ข้อมูลดึงจากแท็บ **Delivery_schedule** โดยตรง)"
   )
 
-  data_main = sheet.get_all_records()
-  df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
-  if not df_main.empty:
-    df_main.columns = [str(c).strip() for c in df_main.columns]
-    delivery_df = df_main.copy()
-    delivery_df["Clean_Qty"] = delivery_df["Quantity"].apply(clean_quantity)
+  try:
+    del_sheet = sh.worksheet("Delivery_schedule")
+    data_del = del_sheet.get_all_records()
+    df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
+  except gspread.exceptions.WorksheetNotFound:
+    st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets (กรุณาสร้างแท็บนี้ก่อนครับ)")
+    df_del = pd.DataFrame()
 
-    if "Status" in delivery_df.columns:
-      delivery_df = delivery_df[
-          (~delivery_df["Status"].astype(str).str.strip().str.lower().eq("delivered"))
-          & (delivery_df["Clean_Qty"] > 0)
-      ]
+  if not df_del.empty:
+    df_del.columns = [str(c).strip() for c in df_del.columns]
 
-    if not delivery_df.empty and "Shipment date" in delivery_df.columns:
-      delivery_df["Shipment date str"] = delivery_df["Shipment date"].astype(str).str.strip()
-      delivery_df["Is_TBD"] = delivery_df["Shipment date str"].str.lower() == "to be decided"
+    # ค้นหาคอลัมน์ที่ใช้ระบุวันที่จัดส่งเพื่อนำมาจัดกลุ่ม (รองรับหลายชื่อ)
+    date_col = None
+    possible_date_cols = ["Shipment date", "Delivery date", "Shipment Date", "Delivery Date", "วันที่ส่ง", "วันที่จัดส่ง"]
+    for col in possible_date_cols:
+        if col in df_del.columns:
+            date_col = col
+            break
 
-      tbd_df = delivery_df[delivery_df["Is_TBD"]].copy()
-      dated_df = delivery_df[~delivery_df["Is_TBD"]].copy()
+    if date_col:
+        df_del[date_col] = df_del[date_col].astype(str).str.strip()
+        # ตรวจสอบว่าเป็น TBD หรือช่องว่าง
+        df_del["Is_TBD"] = df_del[date_col].str.lower().isin(["to be decided", "tbd", "", "nan", "nat", "none"])
 
-      dated_df = dated_df.sort_values(by="Shipment date str", ascending=True)
-      unique_dates = dated_df["Shipment date str"].unique()
+        tbd_df = df_del[df_del["Is_TBD"]].copy()
+        dated_df = df_del[~df_del["Is_TBD"]].copy()
 
-      for d_date in unique_dates:
-        sub_df = dated_df[dated_df["Shipment date str"] == d_date]
-        sub_display = sub_df.drop(columns=["Is_TBD", "Clean_Qty", "Shipment date str"], errors="ignore")
-        
-        st.markdown(
-            f"""
-            <div style="background-color: #4fd1c5; color: #1a202c; padding: 10px 15px; 
-            border-radius: 8px; margin-top: 15px; margin-bottom: 10px; font-weight: bold; font-size: 16px; 
-            border-left: 5px solid #319795;">
-                📅 กำหนดส่งวันที่: {d_date}
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        st.dataframe(format_df_quantity(sub_display), use_container_width=True)
+        dated_df = dated_df.sort_values(by=date_col, ascending=True)
+        unique_dates = dated_df[date_col].unique()
 
-      if not tbd_df.empty:
-        tbd_display = tbd_df.drop(columns=["Is_TBD", "Clean_Qty", "Shipment date str"], errors="ignore")
-        
-        st.markdown(
-            f"""
-            <div style="background-color: #f6ad55; color: white; padding: 10px 15px; 
-            border-radius: 8px; margin-top: 25px; margin-bottom: 10px; font-weight: bold; font-size: 16px;
-            border-left: 5px solid #dd6b20;">
-                ⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ)
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        st.dataframe(format_df_quantity(tbd_display), use_container_width=True)
+        for d_date in unique_dates:
+            sub_df = dated_df[dated_df[date_col] == d_date]
+            sub_display = sub_df.drop(columns=["Is_TBD"], errors="ignore")
+            
+            st.markdown(
+                f"""
+                <div style="background-color: #4fd1c5; color: #1a202c; padding: 10px 15px; 
+                border-radius: 8px; margin-top: 15px; margin-bottom: 10px; font-weight: bold; font-size: 16px; 
+                border-left: 5px solid #319795;">
+                    📅 กำหนดส่งวันที่: {d_date}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            st.dataframe(format_df_quantity(sub_display), use_container_width=True)
 
+        if not tbd_df.empty:
+            tbd_display = tbd_df.drop(columns=["Is_TBD"], errors="ignore")
+            
+            st.markdown(
+                f"""
+                <div style="background-color: #f6ad55; color: white; padding: 10px 15px; 
+                border-radius: 8px; margin-top: 25px; margin-bottom: 10px; font-weight: bold; font-size: 16px;
+                border-left: 5px solid #dd6b20;">
+                    ⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ หรือไม่ได้ระบุวันที่)
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            st.dataframe(format_df_quantity(tbd_display), use_container_width=True)
     else:
-      st.info("ไม่พบรายการที่ต้องจัดส่งในขณะนี้")
+        # ถ้าไม่พบคอลัมน์วันที่ ให้แสดงตารางรวดเดียวเลย
+        st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่ง (เช่น Shipment date) ในแท็บนี้ ระบบจึงแสดงข้อมูลทั้งหมดรวมกัน")
+        st.dataframe(format_df_quantity(df_del), use_container_width=True)
   else:
-    st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
+    st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule' หรือค้นหาแท็บไม่พบ")
 
 # ==========================================
 # หน้าที่ 2: Stock Summary & Details
@@ -854,7 +862,7 @@ elif menu == "📦 Packing Module":
     else: wip_df = pd.DataFrame()
 
     if wip_df.empty:
-      st.warning("⚠️ ยังไม่พบข้อมูลสินค้าประเภท 'WIP' ในระบบ")
+      st.warning("⚠️ ยังไม่พบข้อมูลสินค้าประเภท 'WIP'ในระบบ")
     else:
       wip_df["Clean_Qty"] = wip_df["Quantity"].apply(clean_quantity)
       available_wip = wip_df[wip_df["Clean_Qty"] > 0].copy()
