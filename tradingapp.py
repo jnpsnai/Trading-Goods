@@ -1094,12 +1094,15 @@ elif menu == "📦 Packing Module":
             for disp in selected_wip_disps:
                 info = wip_map[disp]
                 mq = info["qty"]
-                # 👇 เติม key=f"pack_w_{info['row_idx']}" ไว้ท้ายสุด
-                w_qty = st.number_input(f"เบิกจาก {disp}", min_value=0.0, max_value=float(mq), step=0.1, value=float(mq), key=f"pack_w_{info['row_idx']}")
-                wip_withdrawals[disp] = w_qty
-                
-                # Default ดึงค่า max มาให้
-                w_qty = st.number_input(f"เบิกจาก {disp}", min_value=0.0, max_value=float(mq), step=0.1, value=float(mq))
+                # ต้องมีคำสั่ง st.number_input แค่บรรทัดเดียวเท่านั้น
+                w_qty = st.number_input(
+                    f"เบิกจาก {disp}", 
+                    min_value=0.0, 
+                    max_value=float(mq), 
+                    step=0.1, 
+                    value=float(mq), 
+                    key=f"pack_w_{info['row_idx']}"
+                )
                 wip_withdrawals[disp] = w_qty
 
             st.divider()
