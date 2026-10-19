@@ -853,22 +853,19 @@ elif menu == "📝 Trading Goods Registration":
             "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
             "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
             "Receive date": receive_date_str, 
-            "Quantity": float(quantity), # แก้จาก str เป็น float เพื่อให้ลงเป็นตัวเลข
+            "Quantity": float(quantity), # แปลงเป็น float เพื่อให้ลงเป็นตัวเลข
             "Remark Qty": remark_qty,
             "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
             "Type": prod_type, "Status": status, "Packing date": "",
         }
         
+        # 🛠️ แก้ไขโดยการเอา table_range="A1" ออก ปล่อยให้ระบบต่อท้ายแถวให้อัตโนมัติ
         sheet.append_row(
             [row_dict.get(h, "") for h in latest_headers],
-            table_range="A1",
             value_input_option='USER_ENTERED' # บังคับให้ Google Sheets อ่านค่าเป็นตัวเลข
         )
         
-        # ---------------------------------------------------------
-        # 2. สั่งล้างความจำ Cache ทันทีที่มีการบันทึกข้อมูลใหม่
-        # เพื่อให้ตารางด้านล่างอัปเดตข้อมูลล่าสุดทันที
-        # ---------------------------------------------------------
+        # ล้างความจำ Cache เพื่อดึงข้อมูลใหม่มาแสดงทันที
         get_cached_data.clear() 
 
         st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
