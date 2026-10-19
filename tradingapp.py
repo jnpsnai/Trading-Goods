@@ -204,7 +204,7 @@ def format_df_quantity(df):
   return df
 
 # ==========================================
-# หน้าที่ 1: Delivery Issue (อัปเดตดึงจากแท็บ Delivery_schedule)
+# หน้าที่ 1: Delivery Issue (อัปเดตดึงจากแท็บ Delivery_schedule และสลับสีแยกวัน)
 # ==========================================
 if menu == "🚨 Delivery Issue":
   st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
@@ -213,19 +213,20 @@ if menu == "🚨 Delivery Issue":
   )
 
   try:
+    # อัปเดตชื่อแท็บตามที่คุณเปลี่ยน
     del_sheet = sh.worksheet("Delivery_schedule")
     data_del = del_sheet.get_all_records()
     df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
   except gspread.exceptions.WorksheetNotFound:
-    st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets (กรุณาสร้างแท็บนี้ก่อนครับ)")
+    st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets (กรุณาตรวจสอบชื่อแท็บครับ)")
     df_del = pd.DataFrame()
 
   if not df_del.empty:
     df_del.columns = [str(c).strip() for c in df_del.columns]
 
-    # ค้นหาคอลัมน์ที่ใช้ระบุวันที่จัดส่งเพื่อนำมาจัดกลุ่ม (รองรับหลายชื่อ)
+    # ค้นหาคอลัมน์ที่ใช้ระบุวันที่จัดส่ง (เพิ่ม Expected Shipping Date เข้าไปเป็นลำดับแรก)
     date_col = None
-    possible_date_cols = ["Shipment date", "Delivery date", "Shipment Date", "Delivery Date", "วันที่ส่ง", "วันที่จัดส่ง"]
+    possible_date_cols = ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date", "วันที่ส่ง", "วันที่จัดส่ง"]
     for col in possible_date_cols:
         if col in df_del.columns:
             date_col = col
@@ -242,15 +243,22 @@ if menu == "🚨 Delivery Issue":
         dated_df = dated_df.sort_values(by=date_col, ascending=True)
         unique_dates = dated_df[date_col].unique()
 
-        for d_date in unique_dates:
+        # ชุดสี Pastel สำหรับสลับสีแยกตามวัน
+        color_palette = ["#4fd1c5", "#68d391", "#63b3ed", "#b794f4", "#f687b3", "#fc8181", "#fbd38d"]
+
+        # วนลูปสร้างตารางแยกตามวัน พร้อมสลับสี
+        for idx, d_date in enumerate(unique_dates):
             sub_df = dated_df[dated_df[date_col] == d_date]
             sub_display = sub_df.drop(columns=["Is_TBD"], errors="ignore")
             
+            # ดึงสีจากชุดสีตามลำดับ (ถ้ามีหลายวันเกินจะวนกลับมาสีแรก)
+            bg_color = color_palette[idx % len(color_palette)]
+            
             st.markdown(
                 f"""
-                <div style="background-color: #4fd1c5; color: #1a202c; padding: 10px 15px; 
+                <div style="background-color: {bg_color}; color: #1a202c; padding: 10px 15px; 
                 border-radius: 8px; margin-top: 15px; margin-bottom: 10px; font-weight: bold; font-size: 16px; 
-                border-left: 5px solid #319795;">
+                border-left: 5px solid rgba(0,0,0,0.2);">
                     📅 กำหนดส่งวันที่: {d_date}
                 </div>
                 """,
@@ -258,14 +266,15 @@ if menu == "🚨 Delivery Issue":
             )
             st.dataframe(format_df_quantity(sub_display), use_container_width=True)
 
+        # ส่วนของสินค้าที่ยังไม่ได้ระบุวัน (To be decided)
         if not tbd_df.empty:
             tbd_display = tbd_df.drop(columns=["Is_TBD"], errors="ignore")
             
             st.markdown(
                 f"""
-                <div style="background-color: #f6ad55; color: white; padding: 10px 15px; 
+                <div style="background-color: #cbd5e0; color: #1a202c; padding: 10px 15px; 
                 border-radius: 8px; margin-top: 25px; margin-bottom: 10px; font-weight: bold; font-size: 16px;
-                border-left: 5px solid #dd6b20;">
+                border-left: 5px solid #718096;">
                     ⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ หรือไม่ได้ระบุวันที่)
                 </div>
                 """,
@@ -274,7 +283,7 @@ if menu == "🚨 Delivery Issue":
             st.dataframe(format_df_quantity(tbd_display), use_container_width=True)
     else:
         # ถ้าไม่พบคอลัมน์วันที่ ให้แสดงตารางรวดเดียวเลย
-        st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่ง (เช่น Shipment date) ในแท็บนี้ ระบบจึงแสดงข้อมูลทั้งหมดรวมกัน")
+        st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่ง (เช่น Expected Shipping Date) ในแท็บนี้ ระบบจึงแสดงข้อมูลทั้งหมดรวมกัน")
         st.dataframe(format_df_quantity(df_del), use_container_width=True)
   else:
     st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule' หรือค้นหาแท็บไม่พบ")
