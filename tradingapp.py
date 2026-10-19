@@ -879,28 +879,39 @@ elif menu == "📝 Trading Goods Registration":
         # จัดเรียงข้อมูลให้ตรงกับหัวคอลัมน์เป๊ะๆ
         row_to_insert = [row_dict.get(h, "") for h in latest_headers]
         
-        # 🛠️ ใช้ append_row พร้อมระบุ value_input_option เพื่อความเสถียรสูงสุด ป้องกัน APIError ของ gspread เวอร์ชันใหม่
+        # 🚀 บันทึกข้อมูลลง Google Sheets ตรงๆ ทันที
         sheet.append_row(
             values=row_to_insert,
             value_input_option='USER_ENTERED'
         )
         
-        # ล้างความจำ Cache เพื่อดึงข้อมูลใหม่มาแสดงทันที
+        # เคลียร์ Cache เพื่อความชัวร์
         get_cached_data.clear() 
 
         st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
+        time.sleep(1) # หน่วงเวลาเล็กน้อยให้ Google Sheets บันทึกข้อมูลเสร็จสมบูรณ์
         st.rerun()
 
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
   
-  # ดึงข้อมูลผ่านฟังก์ชัน Cache
-  data = get_cached_data(sheet)
-  
-  if data: 
-      st.dataframe(format_df_quantity(pd.DataFrame(data)), use_container_width=True)
-  else: 
-      st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
+  # 🛠️ [แก้ปัญหาข้อมูลไม่ขึ้น] ดึงข้อมูลแบบสดๆ (Direct Fetch) ข้าม Cache มาแสดงผลทันที เพื่อป้องกันข้อมูลค้าง
+  try:
+      raw_rows = sheet.get_all_values()
+      if raw_rows and len(raw_rows) > 1:
+          headers = [str(h).strip() for h in raw_rows[0]]
+          live_data = []
+          for r in raw_rows[1:]:
+              while len(r) < len(headers):
+                  r.append("")
+              live_data.append({headers[i]: r[i] for i in range(len(headers))})
+          
+          df_display = pd.DataFrame(live_data)
+          st.dataframe(format_df_quantity(df_display), use_container_width=True)
+      else:
+          st.info("ยังไม่มีข้อมูลในระบบ Google Sheets")
+  except Exception as e:
+      st.error(f"ไม่สามารถโหลดข้อมูลแสดงผลได้: {e}")
 
 # ==========================================
 # หน้าที่ 5: Edit Registration
