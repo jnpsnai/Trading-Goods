@@ -194,17 +194,36 @@ def clean_quantity(val):
     return 0.0
 
 def format_df_quantity(df):
-  """ฟังก์ชันช่วยแปลงคอลัมน์ Quantity ให้แสดงผลเป็นคอมมา (มีลูกน้ำ)"""
+  """ฟังก์ชันใส่ลูกน้ำ (,) ให้หลักพัน สำหรับคอลัมน์ที่เป็นตัวเลขทั้งหมด (ยกเว้นรหัส Lot หรือปี)"""
   if df is not None and not df.empty:
     df_copy = df.copy()
     for col in df_copy.columns:
-      if "qty" in col.lower() or "quantity" in col.lower():
-        df_copy[col] = df_copy[col].apply(lambda x: f"{clean_quantity(x):,.2f}" if pd.notnull(x) and x != "" else x)
+      col_str = str(col).lower()
+      
+      # คีย์เวิร์ดคอลัมน์ตัวเลขที่ต้องการฟอร์แมต
+      keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า"]
+      is_target_col = any(k in col_str for k in keywords)
+      is_numeric_type = pd.api.types.is_numeric_dtype(df_copy[col]) and not pd.api.types.is_bool_dtype(df_copy[col])
+      
+      # คีย์เวิร์ดคอลัมน์ที่ไม่ต้องการให้ใส่ลูกน้ำ (เช่น Lot, ID, Year)
+      ignore_kws = ["year", "ปี", "lot", "id", "เลข", "no.", "รหัส"]
+      is_ignore = any(ig in col_str for ig in ignore_kws)
+      
+      if (is_target_col or is_numeric_type) and not is_ignore:
+        def format_num(x):
+          try:
+            if pd.isna(x) or x == "": return x
+            val = float(x)
+            # ถ้าเป็นเลขจำนวนเต็มให้โชว์ไม่มีทศนิยม ถ้ามีทศนิยมให้โชว์ 2 ตำแหน่ง
+            return f"{val:,.2f}" if val % 1 != 0 else f"{int(val):,}"
+          except:
+            return x
+        df_copy[col] = df_copy[col].apply(format_num)
     return df_copy
   return df
 
 # ==========================================
-# หน้าที่ 1: Delivery Issue (อัปเดตดึงจากแท็บ Delivery_schedule และสลับสีแยกวัน)
+# หน้าที่ 1: Delivery Issue
 # ==========================================
 if menu == "🚨 Delivery Issue":
   st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
@@ -213,7 +232,6 @@ if menu == "🚨 Delivery Issue":
   )
 
   try:
-    # อัปเดตชื่อแท็บตามที่คุณเปลี่ยน
     del_sheet = sh.worksheet("Delivery_schedule")
     data_del = del_sheet.get_all_records()
     df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
@@ -224,7 +242,6 @@ if menu == "🚨 Delivery Issue":
   if not df_del.empty:
     df_del.columns = [str(c).strip() for c in df_del.columns]
 
-    # ค้นหาคอลัมน์ที่ใช้ระบุวันที่จัดส่ง (เพิ่ม Expected Shipping Date เข้าไปเป็นลำดับแรก)
     date_col = None
     possible_date_cols = ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date", "วันที่ส่ง", "วันที่จัดส่ง"]
     for col in possible_date_cols:
@@ -234,7 +251,6 @@ if menu == "🚨 Delivery Issue":
 
     if date_col:
         df_del[date_col] = df_del[date_col].astype(str).str.strip()
-        # ตรวจสอบว่าเป็น TBD หรือช่องว่าง
         df_del["Is_TBD"] = df_del[date_col].str.lower().isin(["to be decided", "tbd", "", "nan", "nat", "none"])
 
         tbd_df = df_del[df_del["Is_TBD"]].copy()
@@ -243,47 +259,62 @@ if menu == "🚨 Delivery Issue":
         dated_df = dated_df.sort_values(by=date_col, ascending=True)
         unique_dates = dated_df[date_col].unique()
 
-        # ชุดสี Pastel สำหรับสลับสีแยกตามวัน
         color_palette = ["#4fd1c5", "#68d391", "#63b3ed", "#b794f4", "#f687b3", "#fc8181", "#fbd38d"]
 
-        # วนลูปสร้างตารางแยกตามวัน พร้อมสลับสี
         for idx, d_date in enumerate(unique_dates):
             sub_df = dated_df[dated_df[date_col] == d_date]
             sub_display = sub_df.drop(columns=["Is_TBD"], errors="ignore")
             
-            # ดึงสีจากชุดสีตามลำดับ (ถ้ามีหลายวันเกินจะวนกลับมาสีแรก)
+            # --- ส่วนคำนวณหาวันในสัปดาห์ และ นับจำนวนวันถอยหลัง ---
+            date_display = str(d_date)
+            parsed_d = pd.to_datetime(d_date, dayfirst=True, errors='coerce')
+            
+            if pd.notna(parsed_d):
+                thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+                thai_day_str = thai_days[parsed_d.weekday()] # หาวัน จ-อา
+                
+                diff_days = (parsed_d.date() - date.today()).days # คำนวณส่วนต่างกับวันนี้
+                
+                if diff_days > 0:
+                    diff_text = f"อีก {diff_days} วัน"
+                elif diff_days == 0:
+                    diff_text = "วันนี้"
+                else:
+                    diff_text = f"ผ่านมาแล้ว {abs(diff_days)} วัน"
+                    
+                # รวมข้อความให้เป็นรูปแบบที่สวยงาม
+                date_display = f"วัน{thai_day_str}ที่ {d_date} ({diff_text})"
+            # --------------------------------------------------
+
             bg_color = color_palette[idx % len(color_palette)]
             
             st.markdown(
                 f"""
-                <div style="background-color: {bg_color}; color: #1a202c; padding: 10px 15px; 
-                border-radius: 8px; margin-top: 15px; margin-bottom: 10px; font-weight: bold; font-size: 16px; 
-                border-left: 5px solid rgba(0,0,0,0.2);">
-                    📅 กำหนดส่งวันที่: {d_date}
+                <div style="background-color: {bg_color}; color: #1a202c; padding: 15px 20px; 
+                border-radius: 8px; margin-top: 20px; margin-bottom: 12px; font-weight: bold; font-size: 22px; 
+                border-left: 6px solid rgba(0,0,0,0.2);">
+                    📅 กำหนดส่ง: {date_display}
                 </div>
                 """,
                 unsafe_allow_html=True
             )
             st.dataframe(format_df_quantity(sub_display), use_container_width=True)
 
-        # ส่วนของสินค้าที่ยังไม่ได้ระบุวัน (To be decided)
         if not tbd_df.empty:
             tbd_display = tbd_df.drop(columns=["Is_TBD"], errors="ignore")
-            
             st.markdown(
                 f"""
-                <div style="background-color: #cbd5e0; color: #1a202c; padding: 10px 15px; 
-                border-radius: 8px; margin-top: 25px; margin-bottom: 10px; font-weight: bold; font-size: 16px;
-                border-left: 5px solid #718096;">
-                    ⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ หรือไม่ได้ระบุวันที่)
+                <div style="background-color: #cbd5e0; color: #1a202c; padding: 15px 20px; 
+                border-radius: 8px; margin-top: 30px; margin-bottom: 12px; font-weight: bold; font-size: 22px;
+                border-left: 6px solid #718096;">
+                    ⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ)
                 </div>
                 """,
                 unsafe_allow_html=True
             )
             st.dataframe(format_df_quantity(tbd_display), use_container_width=True)
     else:
-        # ถ้าไม่พบคอลัมน์วันที่ ให้แสดงตารางรวดเดียวเลย
-        st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่ง (เช่น Expected Shipping Date) ในแท็บนี้ ระบบจึงแสดงข้อมูลทั้งหมดรวมกัน")
+        st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้ ระบบจึงแสดงข้อมูลทั้งหมดรวมกัน")
         st.dataframe(format_df_quantity(df_del), use_container_width=True)
   else:
     st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule' หรือค้นหาแท็บไม่พบ")
