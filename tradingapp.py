@@ -1151,7 +1151,6 @@ elif menu == "📦 Packing Module":
                         col_end_letter = chr(64 + len(latest_headers)).upper()
                         combined_source_lots = [] 
                         
-                        # [เทคนิคใหม่] ดึงข้อมูลทั้งหมดของชีตมาเก็บไว้ใน Python ครั้งเดียวจบ ไม่เปลือง API โควตา
                         all_sheet_rows = sheet.get_all_values()
                         
                         # 1. หักลบสต็อกต้นทาง (WIP) ทุกบรรทัดที่เลือก
@@ -1162,7 +1161,6 @@ elif menu == "📦 Packing Module":
                                 lot_no = info["lot_no"]
                                 combined_source_lots.append(lot_no)
                                 
-                                # ดึงข้อมูลแถวนี้จากตัวแปรที่โหลดมาแล้ว (แถวใน Google Sheets เริ่มที่ 1 แต่ Index ใน Python เริ่มที่ 0 จึงต้องลบ 1)
                                 row_values = list(all_sheet_rows[row_idx - 1])
                                 while len(row_values) < len(latest_headers): 
                                     row_values.append("")
@@ -1177,11 +1175,8 @@ elif menu == "📦 Packing Module":
                                     elif h == "Status": 
                                         row_values[idx] = new_status
                                 
-                                sheet.update(
-                                    range_name=f"A{row_idx}:{col_end_letter}{row_idx}", 
-                                    values=[row_values], 
-                                    value_input_option='USER_ENTERED'
-                                )
+                                # ใช้คำสั่ง update แบบระบุ range ตรงๆ ตามรูปแบบที่ gspread เสถียรที่สุด
+                                sheet.update(f"A{row_idx}:{col_end_letter}{row_idx}", [row_values], value_input_option='USER_ENTERED')
                                 time.sleep(1)
 
                         source_lots_str = ", ".join(combined_source_lots)
@@ -1191,24 +1186,17 @@ elif menu == "📦 Packing Module":
                         breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
                         log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         
-                        # 2. บันทึกลง Packing_Log
+                        # 2. บันทึกลง Packing_Log (เปลี่ยนมาใช้ append_row เพื่อความเสถียรสูงสุด ไม่ต้องกังวลเรื่อง Range)
                         packing_log_row = [
                             log_time, source_lots_str, default_fg_name, packed_fg_name, breakdown_str, 
                             float(total_packed_output), float(waste_qty), packing_date_str, note
                         ]
-                        next_pack_row = len(packing_sheet.col_values(1)) + 1
-                        
-                        packing_sheet.update(
-                            range_name=f"A{next_pack_row}", 
-                            values=[packing_log_row], 
-                            value_input_option='USER_ENTERED'
-                        )
+                        packing_sheet.append_row(packing_log_row, value_input_option='USER_ENTERED')
                         time.sleep(1)
 
                         # 3. บันทึก FG ลง Packing_Records
                         fg_items = [(g1_type, g1_qty), (g2_type, g2_qty), (g3_type, g3_qty), (g4_type, g4_qty)]
                         created_count = 0
-                        next_rec_row = len(packing_records_sheet.col_values(1)) + 1
                         
                         for idx_fg, (g_type, g_q) in enumerate(fg_items):
                             if g_q > 0:
@@ -1219,13 +1207,7 @@ elif menu == "📦 Packing Module":
                                     log_time, source_lots_str, default_fg_name, packed_fg_name, custom_fg_lot, 
                                     g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
                                 ]
-                                
-                                packing_records_sheet.update(
-                                    range_name=f"A{next_rec_row}", 
-                                    values=[rec_row], 
-                                    value_input_option='USER_ENTERED'
-                                )
-                                next_rec_row += 1
+                                packing_records_sheet.append_row(rec_row, value_input_option='USER_ENTERED')
                                 time.sleep(1)
 
                         st.success(f"✅ บันทึกสำเร็จ! นำ WIP จำนวน {total_withdraw:,.2f} g ไปแพ็ก และสร้าง Lot FG ใหม่ {created_count} รายการ 🎉")
