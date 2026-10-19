@@ -221,7 +221,7 @@ def format_df_quantity(df):
   return df
 
 # ==========================================
-# หน้าที่ 1: Delivery Issue (อัปเกรด Status, Color Urgency, Reschedule & Direct Link)
+# หน้าที่ 1: Delivery Issue (อัปเกรด Status, Color Urgency, Multi-Reschedule & Direct Link)
 # ==========================================
 if menu == "🚨 Delivery Issue":
   # แบ่งหน้าจอ 2 ฝั่ง ซ้าย=หัวข้อ ขวา=ปุ่มทางลัด Google Sheets
@@ -235,7 +235,6 @@ if menu == "🚨 Delivery Issue":
     with st.expander("🔗 Direct Google Sheets (Delivery_schedule)"):
       pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del", placeholder="กรอกรหัสผ่านเพื่อแสดงลิงก์")
       if pwd == "tstd":
-        # คุณสามารถเปลี่ยนลิงก์ตรงนี้โดยเอาพารามิเตอร์ gid=... ของแท็บ Delivery_schedule มาใส่แทนได้ครับ เพื่อให้คลิกแล้วเด้งเข้าแท็บนั้นเลย
         st.markdown("[🟢 **คลิกที่นี่เพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
       elif pwd != "":
         st.error("รหัสผ่านไม่ถูกต้อง ❌")
@@ -275,10 +274,10 @@ if menu == "🚨 Delivery Issue":
             date_col = col
             break
 
-    # --- 3. UI ฟอร์มปรับเปลี่ยนวันจัดส่ง (Reschedule) วางไว้ด้านบนให้หาง่ายๆ ---
+    # --- 3. UI ฟอร์มปรับเปลี่ยนวันจัดส่ง (Reschedule) อัปเกรดให้เลือกหลายรายการได้ ---
     with st.expander("✏️ เลื่อน/ปรับเปลี่ยนกำหนดการจัดส่ง (Reschedule)"):
         with st.form("reschedule_form"):
-            st.markdown("เลือกรายการที่เลยกำหนด หรือต้องการเลื่อนวันส่ง เพื่ออัปเดตลง Google Sheets")
+            st.markdown("เลือกรายการที่เลยกำหนด หรือต้องการเลื่อนวันส่ง เพื่ออัปเดตลง Google Sheets **(สามารถเลือกได้หลายรายการพร้อมกัน)**")
             
             reschedule_opts = []
             reschedule_map = {}
@@ -287,33 +286,50 @@ if menu == "🚨 Delivery Issue":
                 curr_dt = str(r.get(date_col, "")) if date_col else ""
                 vol = r.get("Volume", 0)
                 
-                # พยายามหาชื่อสินค้ามาโชว์ใน Dropdown
-                name_kws = ["Cultivar Name", "Export Name", "Product", "ชื่อ", "Item"]
+                # พยายามหาชื่อสินค้ามาโชว์ใน Dropdown (คลุมทุกกรณีตัวพิมพ์เล็ก/ใหญ่)
+                cultivar_cols = ["Cultivar Name", "Cultivar name", "Cultivar", "Export Name", "Product", "ชื่อ"]
                 item_name = "Unknown Item"
-                for nk in name_kws:
-                    if nk in df_del.columns and str(r.get(nk, "")).strip():
-                        item_name = str(r.get(nk, ""))
+                for nk in cultivar_cols:
+                    if nk in df_del.columns and str(r.get(nk, "")).strip() and str(r.get(nk, "")).strip().lower() != 'nan':
+                        item_name = str(r.get(nk, "")).strip()
                         break
+
+                # พยายามหา Grade มาโชว์
+                grade_cols = ["Grade", "grade", "Size", "size"]
+                item_grade = "-"
+                for gk in grade_cols:
+                    if gk in df_del.columns and str(r.get(gk, "")).strip() and str(r.get(gk, "")).strip().lower() != 'nan':
+                        item_grade = str(r.get(gk, "")).strip()
+                        break
+                
+                # ฟอร์แมต Volume ให้มีลูกน้ำ
+                try: vol_disp = f"{float(vol):,.2f}" if float(vol) % 1 != 0 else f"{int(vol):,}"
+                except: vol_disp = str(vol)
                         
-                disp_txt = f"บรรทัด {row_idx} | สินค้า: {item_name} | วันเดิม: {curr_dt} | Volume: {vol}"
+                disp_txt = f"บรรทัด {row_idx} | {item_name} (Grade: {item_grade}) | วันเดิม: {curr_dt} | Volume: {vol_disp}"
                 reschedule_opts.append(disp_txt)
                 reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt}
                 
-            selected_item = st.selectbox("เลือกรายการที่ต้องการแก้ไข", ["-- กรุณาเลือก --"] + reschedule_opts)
+            # เปลี่ยนจาก selectbox เป็น multiselect
+            selected_items = st.multiselect("เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts)
             new_date = st.date_input("กำหนดการใหม่ (New Expected Date)", value=date.today())
             
             if st.form_submit_button("💾 บันทึกกำหนดการใหม่"):
-                if selected_item == "-- กรุณาเลือก --":
-                    st.error("กรุณาเลือกรายการก่อนทำการบันทึก")
+                if not selected_items:
+                    st.error("❌ กรุณาเลือกรายการอย่างน้อย 1 รายการก่อนทำการบันทึก")
                 elif date_col:
                     headers = del_sheet.row_values(1)
                     if date_col in headers:
                         col_idx = headers.index(date_col) + 1 # +1 เพราะ Google Sheet นับเริ่มที่ 1
-                        target_row = reschedule_map[selected_item]["row_idx"]
                         
-                        # ยิง API ไปแก้ไขเฉพาะ Cell นั้นใน Google Sheets
-                        del_sheet.update_cell(target_row, col_idx, str(new_date))
-                        st.success(f"✅ อัปเดตวันจัดส่งใหม่เป็น {new_date} สำหรับรายการบรรทัดที่ {target_row} เรียบร้อยแล้ว!")
+                        success_rows = []
+                        # วนลูปอัปเดตทุกบรรทัดที่เลือก
+                        for sel in selected_items:
+                            target_row = reschedule_map[sel]["row_idx"]
+                            del_sheet.update_cell(target_row, col_idx, str(new_date))
+                            success_rows.append(str(target_row))
+                            
+                        st.success(f"✅ อัปเดตวันจัดส่งใหม่เป็น {new_date} สำหรับรายการบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว!")
                         st.rerun() # รีเฟรชหน้าเว็บเพื่อดึงข้อมูลใหม่
                     else:
                         st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
