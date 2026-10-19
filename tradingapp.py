@@ -290,7 +290,7 @@ if menu == "🚨 Delivery Issue":
     # เก็บเลขบรรทัดไว้ใช้อัปเดตวันจัดส่ง (Index 0 ของ Pandas = Row 2 ใน Sheets)
     df_del["Original_Row_Index"] = df_del.index + 2
 
-   import re # นำเข้าไลบรารีสกัดตัวเลขจากข้อความ
+    import re # นำเข้าไลบรารีสกัดตัวเลขจากข้อความ
 
     # --- 1. ตรวจสอบสถานะความพร้อม (Status OK/Wait Pack/Wait Receive) ---
     # เช็คว่าชีตใช้ชื่อคอลัมน์ไหนระหว่าง Available FG หรือ Available FG Onhand
