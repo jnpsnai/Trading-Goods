@@ -133,7 +133,7 @@ except:
       "Waste Qty",
       "Packing Date",
       "Note",
-  ])
+  ], table_range="A1")
 
 try:
   packing_sheet = sh.worksheet("Packing_Log")
@@ -149,7 +149,7 @@ except:
       "Waste Qty",
       "Packing Date",
       "Note",
-  ])
+  ], table_range="A1")
 
 try:
   shipped_sheet = sh.worksheet("Shipped_Out_Log")
@@ -167,7 +167,7 @@ except:
       "Shipping Reason",
       "Shipment Date",
       "Note",
-  ])
+  ], table_range="A1")
 
 # --- 4. Sidebar เมนูด้านซ้าย ---
 st.sidebar.title("🌱 Thai Stick Trading")
@@ -687,7 +687,6 @@ elif menu == "📝 Trading Goods Registration":
             "Type": prod_type, "Status": status, "Packing date": "",
         }
         
-        # ส่วนที่อัปเดตใหม่ ต้องเยื้องให้ตรงกับ row_dict ด้านบน
         sheet.append_row(
             [str(row_dict.get(h, "")) for h in latest_headers],
             table_range="A1"
@@ -954,7 +953,10 @@ elif menu == "📦 Packing Module":
 
               breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
               log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-              packing_sheet.append_row([log_time, selected_wip_lot, cultivar_val, packed_fg_name, breakdown_str, str(total_packed_output), str(waste_qty), packing_date_str, note])
+              packing_sheet.append_row([
+                  log_time, selected_wip_lot, cultivar_val, packed_fg_name, breakdown_str, 
+                  str(total_packed_output), str(waste_qty), packing_date_str, note
+              ], table_range="A1")
 
               fg_items = [(g1_type, g1_qty), (g2_type, g2_qty), (g3_type, g3_qty), (g4_type, g4_qty)]
               created_count = 0
@@ -962,7 +964,10 @@ elif menu == "📦 Packing Module":
                 if g_q > 0:
                   created_count += 1
                   custom_fg_lot = f"{selected_wip_lot}-FG{created_count}-{g_type}"
-                  packing_records_sheet.append_row([log_time, selected_wip_lot, cultivar_val, packed_fg_name, custom_fg_lot, g_type, str(g_q), str(waste_qty) if idx_fg == 0 else "0", packing_date_str, note])
+                  packing_records_sheet.append_row([
+                      log_time, selected_wip_lot, cultivar_val, packed_fg_name, custom_fg_lot, 
+                      g_type, str(g_q), str(waste_qty) if idx_fg == 0 else "0", packing_date_str, note
+                  ], table_range="A1")
 
               st.success(f"✅ บันทึกการแพ็กสำเร็จ! หัก WIP Size {wip_grade} เหลือ {remaining_wip_in_stock:,.2f} และสร้าง Lot FG ใหม่จำนวน {created_count} รายการ 🎉")
 
@@ -1112,7 +1117,7 @@ elif menu == "🚚 Shipped Out Module":
           shipped_sheet.append_row([
               log_time, item["category"], item["lot_no"], item["product"], item["grade"], str(qty),
               consignee, client_name, shipping_reason, shipment_date_str, note_ship
-          ])
+          ], table_range="A1")
           success_count += 1
         st.success(f"✅ บันทึกการส่งออกสำเร็จทั้งหมด {success_count} รายการและตัดสต็อกต้นทางเรียบร้อยแล้ว! 🎉")
 
