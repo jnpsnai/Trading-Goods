@@ -202,29 +202,33 @@ def clean_quantity(val):
     return 0.0
 
 def format_df_quantity(df):
-  """ฟังก์ชันใส่ลูกน้ำ (,) ให้หลักพัน สำหรับคอลัมน์ที่เป็นตัวเลขและ Volume (ยกเว้นรหัส Lot หรือปี)"""
+  """ฟังก์ชันแปลงและใส่ลูกน้ำ (,) ให้หลักพัน สำหรับคอลัมน์ตัวเลขและ Volume ทุกตารางในแอป"""
   if df is not None and not df.empty:
     df_copy = df.copy()
     for col in df_copy.columns:
       col_str = str(col).lower()
       
-      # เพิ่มคีย์เวิร์ด volume และปริมาณ เข้าไปให้ระบบดักจับ
+      # คีย์เวิร์ดคอลัมน์ตัวเลขทั้งหมด
       keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ"]
       is_target_col = any(k in col_str for k in keywords)
-      is_numeric_type = pd.api.types.is_numeric_dtype(df_copy[col]) and not pd.api.types.is_bool_dtype(df_copy[col])
       
+      # คีย์เวิร์ดคอลัมน์ที่ไม่ต้องการให้ใส่ลูกน้ำ (เช่น Lot, ID, Year)
       ignore_kws = ["year", "ปี", "lot", "id", "เลข", "no.", "รหัส"]
       is_ignore = any(ig in col_str for ig in ignore_kws)
       
-      if (is_target_col or is_numeric_type) and not is_ignore:
+      if is_target_col and not is_ignore:
+        # บังคับแปลงค่าในคอลัมน์นั้นให้เป็นตัวเลข (float) ก่อน เพื่อแก้ปัญหาข้อมูลที่ดึงมาจาก Google Sheets เป็น Text
+        df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
+        
         def format_num(x):
           try:
-            if pd.isna(x) or x == "": return x
+            if pd.isna(x): return x
             val = float(x)
             return f"{val:,.2f}" if val % 1 != 0 else f"{int(val):,}"
           except:
             return x
         df_copy[col] = df_copy[col].apply(format_num)
+        
     return df_copy
   return df
 
