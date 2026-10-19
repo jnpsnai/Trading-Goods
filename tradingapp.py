@@ -861,13 +861,9 @@ elif menu == "📝 Trading Goods Registration":
         # จัดเรียงข้อมูลให้ตรงกับหัวคอลัมน์เป๊ะๆ
         row_to_insert = [row_dict.get(h, "") for h in latest_headers]
         
-        # 🛠️ ใช้เทคนิคนับจำนวนแถวที่มีข้อมูลจริงในคอลัมน์ A แล้วบวก 1 เพื่อลงบรรทัดใหม่ถัดไปชัวร์ๆ
-        next_row = len(sheet.col_values(1)) + 1
-        col_end_letter = chr(64 + len(latest_headers)).upper()
-        
-        sheet.update(
-            range_name=f"A{next_row}:{col_end_letter}{next_row}", 
-            values=[row_to_insert], 
+        # 🛠️ ใช้ append_row พร้อมระบุ value_input_option เพื่อความเสถียรสูงสุด ป้องกัน APIError ของ gspread เวอร์ชันใหม่
+        sheet.append_row(
+            values=row_to_insert,
             value_input_option='USER_ENTERED'
         )
         
@@ -880,7 +876,7 @@ elif menu == "📝 Trading Goods Registration":
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
   
-  # ดึงข้อมูลผ่านฟังก์ชัน Cache ที่ย้ายไปอยู่ด้านบนสุดของไฟล์
+  # ดึงข้อมูลผ่านฟังก์ชัน Cache
   data = get_cached_data(sheet)
   
   if data: 
