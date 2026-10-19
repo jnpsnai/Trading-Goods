@@ -254,10 +254,10 @@ if menu == "🚨 Delivery Issue":
     df_del["Original_Row_Index"] = df_del.index + 2
 
     # --- 1. ตรวจสอบสถานะความพร้อม (Status OK/Not Ready) ---
-    if "Volume" in df_del.columns and "Available FG Onhand" in df_del.columns:
+    if "Volume" in df_del.columns and "Available FG" in df_del.columns:
         def check_readiness(row):
             vol = clean_quantity(row.get("Volume", 0))
-            onhand = clean_quantity(row.get("Available FG Onhand", 0))
+            onhand = clean_quantity(row.get("Available FG", 0))
             if vol > 0 and onhand >= vol:
                 return "✅ พร้อมส่ง"
             elif vol > 0:
