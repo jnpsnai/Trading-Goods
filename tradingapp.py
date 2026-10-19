@@ -1043,7 +1043,12 @@ elif menu == "📦 Packing Module":
           qty = float(r["Clean_Qty"])
           row_idx = r["Original_Row_Index"]
           
-          disp = f"Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
+          # --- [ส่วนที่แก้ไข] ---
+          # เพิ่ม [บรรทัด {row_idx}] เข้าไปด้านหน้า เพื่อให้ข้อความนี้ไม่ซ้ำกันเด็ดขาด 
+          # แม้ว่า Lot, สายพันธุ์, เกรด และจำนวน จะเหมือนกันเป๊ะๆ ก็ตาม
+          disp = f"[บรรทัด {row_idx}] Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
+          # --------------------
+
           wip_options.append(disp)
           wip_map[disp] = {
               "lot_no": lot_no,
