@@ -290,19 +290,34 @@ if menu == "🚨 Delivery Issue":
     # เก็บเลขบรรทัดไว้ใช้อัปเดตวันจัดส่ง (Index 0 ของ Pandas = Row 2 ใน Sheets)
     df_del["Original_Row_Index"] = df_del.index + 2
 
-    # --- 1. ตรวจสอบสถานะความพร้อม (Status OK/Not Ready) ---
-    if "Volume" in df_del.columns and "Available FG" in df_del.columns:
+   import re # นำเข้าไลบรารีสกัดตัวเลขจากข้อความ
+
+    # --- 1. ตรวจสอบสถานะความพร้อม (Status OK/Wait Pack/Wait Receive) ---
+    # เช็คว่าชีตใช้ชื่อคอลัมน์ไหนระหว่าง Available FG หรือ Available FG Onhand
+    fg_col = "Available FG" if "Available FG" in df_del.columns else "Available FG Onhand"
+    wip_col = "Available WIP"
+
+    if "Volume" in df_del.columns and fg_col in df_del.columns:
         def check_readiness(row):
             vol = clean_quantity(row.get("Volume", 0))
-            onhand = clean_quantity(row.get("Available FG", 0))
+            onhand = clean_quantity(row.get(fg_col, 0))
+            
+            # จัดการ Available WIP ที่เป็น Text (เช่น "BG: 30,000 | SM: 10,000")
+            wip_val = str(row.get(wip_col, "")).replace(",", "")
+            # สกัดหาตัวเลขทั้งหมดในข้อความ แล้วนำมาบวกกัน
+            wip_numbers = re.findall(r"[-+]?\d*\.\d+|\d+", wip_val)
+            total_wip = sum([float(n) for n in wip_numbers]) if wip_numbers else 0.0
+
             if vol > 0 and onhand >= vol:
                 return "✅ พร้อมส่ง"
+            elif total_wip > 0:
+                return "📦 รอแพ็ค"
             elif vol > 0:
-                return "❌ รอสินค้า"
+                return "📥 รอรับเข้าสินค้า"
             else:
                 return "➖ N/A"
+                
         df_del["Status (ความพร้อม)"] = df_del.apply(check_readiness, axis=1)
-
     # --- 2. ค้นหาคอลัมน์วันที่ ---
     date_col = None
     possible_date_cols = ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date"]
