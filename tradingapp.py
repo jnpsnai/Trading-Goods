@@ -1128,38 +1128,28 @@ elif menu == "📦 Packing Module":
             with c5: g3_type = st.selectbox("เกรดช่องที่ 3", grade_options, index=2)
             with c6: g3_qty = st.number_input("จำนวนช่องที่ 3 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g3")
 
-            # ... โค้ดด้านบน ...
+            # ... โค้ดส่วนบนของฟอร์ม ...
             c7, c8 = st.columns(2)
-            with c7: g4_type = st.selectbox("เกรดช่องที่ 4", grade_options, index=3)
-            with c8: g4_qty = st.number_input("จำนวนช่องที่ 4 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g4")
+            with c7: 
+                g4_type = st.selectbox("เกรดช่องที่ 4", grade_options, index=3)
+            with c8: 
+                g4_qty = st.number_input("จำนวนช่องที่ 4 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g4")
 
             st.divider()
             waste_qty = st.number_input("จำนวนของเสีย (Waste Qty)", min_value=0.0, step=0.1, key="waste_pack")
             note = st.text_area("หมายเหตุเพิ่มเติม (Note)", key="note_pack")
 
-            # 👇 เติม key="..." เข้าไปตรงปุ่ม submit เพื่อป้องกัน Error Duplicate Key
+            # จุดที่ต้องระวังย่อหน้าให้อยู่ระดับเดียวกันกับตัวแปรด้านบน
             if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets", key="packing_submit_btn"):
-              total_withdraw = sum(wip_withdrawals.values())
-              total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
+                total_withdraw = sum(wip_withdrawals.values())
+                total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
               
-              if total_withdraw <= 0: 
-            # ... โค้ดด้านล่างทำงานต่อตามปกติ ...
-
-            if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets"):
-              import time # นำเข้า module สำหรับหน่วงเวลา
-
-            if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets"):
-              total_withdraw = sum(wip_withdrawals.values())
-              total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
-              
-              if total_withdraw <= 0: 
-                st.error("❌ กรุณาระบุจำนวนที่เบิกมาแพ็กมากกว่า 0 อย่างน้อย 1 รายการ")
-              elif (total_packed_output + waste_qty) > total_withdraw: 
-                st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
-              else:
-                with st.spinner("⏳ กำลังบันทึกข้อมูล... (กรุณารอสักครู่และอย่าเพิ่งปิดหน้าต่างเพื่อป้องกัน API Error)"):
-                    latest_headers = sheet.row_values(1)
-                    combined_source_lots = []
+                if total_withdraw <= 0: 
+                    st.error("❌ กรุณาระบุจำนวนที่เบิกมาแพ็กมากกว่า 0 อย่างน้อย 1 รายการ")
+                elif (total_packed_output + waste_qty) > total_withdraw: 
+                    st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
+                else:
+                    # ... ส่วนการบันทึกข้อมูล ...
                     
                     # 1. หักลบสต็อกต้นทาง (WIP) ทุกบรรทัดที่เลือก
                     for disp, w_qty in wip_withdrawals.items():
