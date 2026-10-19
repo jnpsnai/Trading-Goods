@@ -226,33 +226,46 @@ def clean_quantity(val):
   except:
     return 0.0
 
+import re
+
 def format_df_quantity(df):
-  """ฟังก์ชันแปลงและใส่ลูกน้ำ (,) ให้หลักพัน สำหรับคอลัมน์ตัวเลขและ Volume ทุกตารางในแอป"""
+  """ฟังก์ชันแปลงและใส่ลูกน้ำ (,) ให้หลักพัน สำหรับคอลัมน์ตัวเลข Volume, Available รวมถึงข้อความผสมตัวเลข"""
   if df is not None and not df.empty:
     df_copy = df.copy()
     for col in df_copy.columns:
       col_str = str(col).lower()
       
-      # คีย์เวิร์ดคอลัมน์ตัวเลขทั้งหมด
-      keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ"]
+      # เพิ่มคีย์เวิร์ด 'available', 'wip', 'fg' ให้ระบบรู้จักคอลัมน์สต็อก
+      keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ", "available", "wip", "fg"]
       is_target_col = any(k in col_str for k in keywords)
       
-      # คีย์เวิร์ดคอลัมน์ที่ไม่ต้องการให้ใส่ลูกน้ำ (เช่น Lot, ID, Year)
       ignore_kws = ["year", "ปี", "lot", "id", "เลข", "no.", "รหัส"]
       is_ignore = any(ig in col_str for ig in ignore_kws)
       
       if is_target_col and not is_ignore:
-        # บังคับแปลงค่าในคอลัมน์นั้นให้เป็นตัวเลข (float) ก่อน เพื่อแก้ปัญหาข้อมูลที่ดึงมาจาก Google Sheets เป็น Text
-        df_copy[col] = pd.to_numeric(df_copy[col], errors='coerce')
-        
-        def format_num(x):
+        def format_mixed(x):
+          if pd.isna(x) or str(x).strip() == "": return x
+          
+          # ลบลูกน้ำเก่าออกก่อนเพื่อจัดระเบียบใหม่ป้องกันการซ้อนทับ
+          clean_str = str(x).replace(",", "")
+          
           try:
-            if pd.isna(x): return x
-            val = float(x)
+            # กรณีที่ 1: เป็นตัวเลขโดดๆ (เช่น 100000.0 หรือ 5000)
+            val = float(clean_str)
             return f"{val:,.2f}" if val % 1 != 0 else f"{int(val):,}"
-          except:
-            return x
-        df_copy[col] = df_copy[col].apply(format_num)
+          except ValueError:
+            # กรณีที่ 2: เป็นข้อความผสมตัวเลข (เช่น "BG: 30000 | SM: 10000")
+            def repl(match):
+                try:
+                    num_val = float(match.group(0))
+                    return f"{num_val:,.2f}" if num_val % 1 != 0 else f"{int(num_val):,}"
+                except:
+                    return match.group(0)
+            
+            # ใช้ Regex ค้นหาและแทนที่เฉพาะตัวเลขที่อยู่ในข้อความ
+            return re.sub(r'\b\d+(?:\.\d+)?\b', repl, clean_str)
+            
+        df_copy[col] = df_copy[col].apply(format_mixed)
         
     return df_copy
   return df
