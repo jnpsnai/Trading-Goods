@@ -1094,6 +1094,10 @@ elif menu == "📦 Packing Module":
             for disp in selected_wip_disps:
                 info = wip_map[disp]
                 mq = info["qty"]
+                # 👇 เติม key=f"pack_w_{info['row_idx']}" ไว้ท้ายสุด
+                w_qty = st.number_input(f"เบิกจาก {disp}", min_value=0.0, max_value=float(mq), step=0.1, value=float(mq), key=f"pack_w_{info['row_idx']}")
+                wip_withdrawals[disp] = w_qty
+                
                 # Default ดึงค่า max มาให้
                 w_qty = st.number_input(f"เบิกจาก {disp}", min_value=0.0, max_value=float(mq), step=0.1, value=float(mq))
                 wip_withdrawals[disp] = w_qty
@@ -1124,13 +1128,22 @@ elif menu == "📦 Packing Module":
             with c5: g3_type = st.selectbox("เกรดช่องที่ 3", grade_options, index=2)
             with c6: g3_qty = st.number_input("จำนวนช่องที่ 3 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g3")
 
+            # ... โค้ดด้านบน ...
             c7, c8 = st.columns(2)
             with c7: g4_type = st.selectbox("เกรดช่องที่ 4", grade_options, index=3)
             with c8: g4_qty = st.number_input("จำนวนช่องที่ 4 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g4")
 
             st.divider()
-            waste_qty = st.number_input("จำนวนของเสีย (Waste Qty)", min_value=0.0, step=0.1)
-            note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
+            waste_qty = st.number_input("จำนวนของเสีย (Waste Qty)", min_value=0.0, step=0.1, key="waste_pack")
+            note = st.text_area("หมายเหตุเพิ่มเติม (Note)", key="note_pack")
+
+            # 👇 เติม key="..." เข้าไปตรงปุ่ม submit เพื่อป้องกัน Error Duplicate Key
+            if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets", key="packing_submit_btn"):
+              total_withdraw = sum(wip_withdrawals.values())
+              total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
+              
+              if total_withdraw <= 0: 
+            # ... โค้ดด้านล่างทำงานต่อตามปกติ ...
 
             if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets"):
               import time # นำเข้า module สำหรับหน่วงเวลา
