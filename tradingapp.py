@@ -678,26 +678,22 @@ elif menu == "📝 Trading Goods Registration":
       
     submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
     if submitted:
-      latest_headers = sheet.row_values(1)
-      row_dict = {
-          "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
-          "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
-          "Receive date": receive_date_str, "Quantity": str(quantity), "Remark Qty": remark_qty,
-          "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
-          "Type": prod_type, "Status": status, "Packing date": "",
-      }
-    # แทนที่คำสั่ง sheet.append_row(...) ด้วยโค้ดนี้ครับ
-        new_data_row = [str(row_dict.get(h, "")) for h in latest_headers]
-
-    # ดึงข้อมูลคอลัมน์ 1 (A) มานับว่ามีข้อมูลจริงๆ กี่บรรทัด แล้วบวก 1 เพื่อระบุบรรทัดถัดไป
-        col_a_data = sheet.col_values(1) 
-        next_row = len(col_a_data) + 1 
-
-    # อัปเดตข้อมูลลงไปตรงๆ ในบรรทัดนั้น
-        col_end_letter = chr(64 + len(latest_headers)).upper()
-        sheet.update(f"A{next_row}:{col_end_letter}{next_row}", [new_data_row])
-      st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
-      st.rerun()
+        latest_headers = sheet.row_values(1)
+        row_dict = {
+            "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
+            "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
+            "Receive date": receive_date_str, "Quantity": str(quantity), "Remark Qty": remark_qty,
+            "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
+            "Type": prod_type, "Status": status, "Packing date": "",
+        }
+        
+        # ส่วนที่อัปเดตใหม่ ต้องเยื้องให้ตรงกับ row_dict ด้านบน
+        sheet.append_row(
+            [str(row_dict.get(h, "")) for h in latest_headers],
+            table_range="A1"
+        )
+        st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
+        st.rerun()
 
   st.divider()
   st.subheader("📋 ประวัติข้อมูลทั้งหมดในระบบ")
