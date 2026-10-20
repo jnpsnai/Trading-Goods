@@ -352,7 +352,7 @@ if menu == "🚨 Delivery Issue":
 # ==========================================
 elif menu == "📊 Stock Summary & Details":
     st.title("📊 Stock Summary & Details")
-    st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) และสรุปยอดแยกตามสายพันธุ์")
+    st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) และการ์ดสรุปยอดแยกตามสายพันธุ์ (WIP & FG)")
 
     data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
@@ -395,101 +395,114 @@ elif menu == "📊 Stock Summary & Details":
         total_fg = fg_stock_df["Clean_Qty"].sum()
         total_on_hand = total_wip + total_fg
 
-        # 📌 1. Metrics สรุปยอดรวมด้านบน (คงไว้ตามเดิม)
+        # 📌 1. Metrics สรุปยอดรวมด้านบน
         st.subheader("📌 สรุปยอดรวมสต็อกในคลังทั้งหมด (Total Stock Summary)")
         col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1: st.metric(label="✨ ยอดรวมสต็อกทั้งหมด", value=f"{total_on_hand:,.2f}")
-        with col_m2: st.metric(label="🧪 ยอดรวมประเภท WIP", value=f"{total_wip:,.2f}")
-        with col_m3: st.metric(label="📦 ยอดรวมประเภท FG", value=f"{total_fg:,.2f}")
+        with col_m1: st.metric(label="✨ ยอดรวมสต็อกทั้งหมด", value=f"{total_on_hand:,.2f} g")
+        with col_m2: st.metric(label="🧪 ยอดรวมประเภท WIP", value=f"{total_wip:,.2f} g")
+        with col_m3: st.metric(label="📦 ยอดรวมประเภท FG", value=f"{total_fg:,.2f} g")
 
         st.divider()
 
-        # 🌟 2. Cardboard สรุปยอดแยกตามสายพันธุ์ (Cultivar Cards) แบบสบายตา
-        st.subheader("🌿 สรุปยอดคงเหลือแยกตามสายพันธุ์ (Cultivar Overview)")
-        
-        # รวมข้อมูลทั้งหมดเพื่อเอามาจัดกลุ่มตามสายพันธุ์
-        cultivar_grouped_df = filtered_df.copy()
-        cultivar_grouped_df["Cultivar Name"] = cultivar_grouped_df["Cultivar Name"].fillna("ไม่ระบุชื่อสายพันธุ์").astype(str).str.strip()
-        cultivar_grouped_df.loc[cultivar_grouped_df["Cultivar Name"] == "", "Cultivar Name"] = "ไม่ระบุชื่อสายพันธุ์"
+        # 🎨 ฟังก์ชันช่วยสร้าง Card แบบตามแบบที่คุณวาดมา
+        def render_category_cards(target_df, section_title):
+            st.subheader(section_title)
+            if target_df.empty:
+                st.info("ไม่มีข้อมูลในหมวดหมู่นี้")
+                return
 
-        # หาชื่อสายพันธุ์ทั้งหมด
-        unique_cultivars = sorted(cultivar_grouped_df["Cultivar Name"].unique())
+            card_data = target_df.copy()
+            card_data["Cultivar Name"] = card_data["Cultivar Name"].fillna("ไม่ระบุชื่อสายพันธุ์").astype(str).str.strip()
+            card_data.loc[card_data["Cultivar Name"] == "", "Cultivar Name"] = "ไม่ระบุชื่อสายพันธุ์"
+            card_data["Grade"] = card_data["Grade"].fillna("General").astype(str).str.strip().str.upper()
 
-        if unique_cultivars:
-            # จัดเรียงการแสดงผลแบบ Grid (แถวละ 3 การ์ด)
+            unique_cultivars = sorted(card_data["Cultivar Name"].unique())
+            
+            # วนลูปสร้างการ์ด (แสดงแถวละ 3 การ์ด)
             card_cols = st.columns(3)
             for idx, cultivar in enumerate(unique_cultivars):
-                sub_c_df = cultivar_grouped_df[cultivar_grouped_df["Cultivar Name"] == cultivar]
-                c_total = sub_c_df["Clean_Qty"].sum()
+                sub_df = card_data[card_data["Cultivar Name"] == cultivar]
+                c_total = sub_df["Clean_Qty"].sum()
                 
-                # แยกยอดตาม Grade / Size
-                grade_breakdown = sub_c_df.groupby("Grade")["Clean_Qty"].sum().to_dict()
-                grade_text_parts = []
-                for g, g_q in grade_breakdown.items():
-                    if g_q > 0:
-                        grade_text_parts.append(f"• **{g or 'General'}**: {g_q:,.2f} g")
-                grade_summary_str = "<br>".join(grade_text_parts) if grade_text_parts else "• ไม่มีข้อมูลเกรด"
+                grade_agg = sub_df.groupby("Grade")["Clean_Qty"].sum().to_dict()
 
-                # แยกสัดส่วน WIP vs FG ของสายพันธุ์นี้
-                wip_part = sub_c_df[sub_c_df["Category"].astype(str).str.contains("WIP", case=False, na=False)]["Clean_Qty"].sum()
-                fg_part = sub_c_df[sub_c_df["Category"].astype(str).str.contains("FG", case=False, na=False)]["Clean_Qty"].sum()
-                type_badge = f"🧪 WIP: {wip_part:,.2f} g | 📦 FG: {fg_part:,.2f} g"
+                # สร้าง HTML กล่องย่อยด้านล่างสำหรับแต่ละ Size (ตามแบบในรูป)
+                size_boxes_html = ""
+                for g_name, g_val in grade_agg.items():
+                    if g_val > 0:
+                        size_boxes_html += f"""
+                        <div style="flex: 1; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 4px; text-align: center; min-width: 70px;">
+                            <div style="font-size: 11px; font-weight: bold; color: #475569;">{g_name}</div>
+                            <div style="font-size: 12px; font-weight: bold; color: #0f172a;">{g_val:,.0f} g</div>
+                        </div>
+                        """
 
-                # แสดงผลเป็นการ์ด (Cardboard UI)
+                if not size_boxes_html:
+                    size_boxes_html = '<div style="font-size: 12px; color: #94a3b8; text-align: center; width: 100%;">ไม่มีข้อมูล Size</div>'
+
+                # ประกอบร่างเป็นการ์ดใหญ่ (ตามแบบสเกตช์ของคุณ)
                 with card_cols[idx % 3]:
                     st.markdown(
                         f"""
-                        <div style="background-color: #ffffff; padding: 16px; border-radius: 12px; border: 1px solid #e2e8f0; box-shadow: 0 2px 4px rgba(0,0,0,0.02); margin-bottom: 16px; min-height: 160px;">
-                            <h4 style="margin: 0 0 8px 0; color: #2d3748; font-size: 18px; border-bottom: 2px solid #e2e8f0; padding-bottom: 6px;">🌱 {cultivar}</h4>
-                            <p style="margin: 4px 0; font-size: 14px; color: #4a5568;"><b>ยอดรวม:</b> <span style="color: #319795; font-weight: bold; font-size: 16px;">{c_total:,.2f} g</span></p>
-                            <p style="margin: 4px 0; font-size: 12px; color: #718096;">{type_badge}</p>
-                            <hr style="margin: 8px 0; border: none; border-top: 1px dashed #edf2f7;">
-                            <div style="font-size: 13px; color: #4a5568; line-height: 1.4;">
-                                {grade_summary_str}
+                        <div style="background-color: #ffffff; padding: 16px; border-radius: 12px; border: 2px solid #e2e8f0; box-shadow: 0 4px 6px rgba(0,0,0,0.03); margin-bottom: 16px;">
+                            <!-- กล่องบน: ชื่อสายพันธุ์ และ ยอดรวม -->
+                            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px; margin-bottom: 12px; text-align: center;">
+                                <div style="font-size: 16px; font-weight: bold; color: #166534; margin-bottom: 4px;">🌱 {cultivar}</div>
+                                <div style="font-size: 13px; color: #374151;">ยอดรวม <span style="font-size: 18px; font-weight: bold; color: #047857;">{c_total:,.2f}</span> g</div>
+                            </div>
+                            <!-- กล่องล่าง: แผงปุ่มแสดง Size ย่อย -->
+                            <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;">
+                                {size_boxes_html}
                             </div>
                         </div>
                         """,
                         unsafe_allow_html=True
                     )
-        else:
-            st.info("ไม่พบข้อมูลสายพันธุ์สินค้า")
+
+        # 🧪 แสดงการ์ดหมวด WIP
+        render_category_cards(wip_stock_df, "🧪 สรุปยอด WIP แยกตามสายพันธุ์และขนาด (WIP Cultivar Cards)")
 
         st.divider()
 
-        # 📂 3. หน้ารายละเอียดตาราง (Minimize เป็นค่า Default ไว้ใน Expander เพื่อความสะอาดตา)
-        with st.expander("📂 คลิกเพื่อดูตารางรายละเอียดสต็อกเชิงลึก (Detailed Tables)", expanded=False):
-            st.subheader("🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
-            if not wip_stock_df.empty:
-                wip_big = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"]["Clean_Qty"].sum()
-                wip_small = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"]["Clean_Qty"].sum()
-                wip_mix = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"]["Clean_Qty"].sum()
-                wip_f = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"]["Clean_Qty"].sum()
+        # 📦 แสดงการ์ดหมวด FG
+        render_category_cards(fg_stock_df, "📦 สรุปยอด FG (Finished Goods) แยกตามสายพันธุ์และขนาด (FG Cultivar Cards)")
 
-                wc1, wc2, wc3, wc4, wc5 = st.columns(5)
-                with wc1: st.metric(label="WIP: Big", value=f"{wip_big:,.2f}")
-                with wc2: st.metric(label="WIP: Small", value=f"{wip_small:,.2f}")
-                with wc3: st.metric(label="WIP: Mix", value=f"{wip_mix:,.2f}")
-                with wc4: st.metric(label="WIP: F", value=f"{wip_f:,.2f}")
-                with wc5: st.metric(label="WIP Total", value=f"{total_wip:,.2f}")
-                st.dataframe(format_df_quantity(wip_stock_df), use_container_width=True)
-            else: st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
+        st.divider()
 
-            st.divider()
-            st.subheader("📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
-            if not fg_stock_df.empty:
-                fg_big = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"]["Clean_Qty"].sum()
-                fg_small = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"]["Clean_Qty"].sum()
-                fg_mix = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"]["Clean_Qty"].sum()
-                fg_f = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"]["Clean_Qty"].sum()
+        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ ไม่ซ่อนแล้ว ตามที่คุณต้องการ)
+        st.subheader("📂 ตารางรายละเอียดสต็อกเชิงลึกทั้งหมด (Detailed Tables)")
+        
+        st.markdown("##### 🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
+        if not wip_stock_df.empty:
+            wip_big = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"]["Clean_Qty"].sum()
+            wip_small = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"]["Clean_Qty"].sum()
+            wip_mix = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"]["Clean_Qty"].sum()
+            wip_f = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"]["Clean_Qty"].sum()
 
-                fc1, fc2, fc3, fc4, fc5 = st.columns(5)
-                with fc1: st.metric(label="FG: Big", value=f"{fg_big:,.2f}")
-                with fc2: st.metric(label="FG: Small", value=f"{fg_small:,.2f}")
-                with fc3: st.metric(label="FG: Mix", value=f"{fg_mix:,.2f}")
-                with fc4: st.metric(label="FG: F", value=f"{fg_f:,.2f}")
-                with fc5: st.metric(label="FG Total", value=f"{total_fg:,.2f}")
-                st.dataframe(format_df_quantity(fg_stock_df), use_container_width=True)
-            else: st.info("ไม่มีรายการสินค้า FG ในคลังขณะนี้")
+            wc1, wc2, wc3, wc4, wc5 = st.columns(5)
+            with wc1: st.metric(label="WIP: Big", value=f"{wip_big:,.2f}")
+            with wc2: st.metric(label="WIP: Small", value=f"{wip_small:,.2f}")
+            with wc3: st.metric(label="WIP: Mix", value=f"{wip_mix:,.2f}")
+            with wc4: st.metric(label="WIP: F", value=f"{wip_f:,.2f}")
+            with wc5: st.metric(label="WIP Total", value=f"{total_wip:,.2f}")
+            st.dataframe(format_df_quantity(wip_stock_df), use_container_width=True)
+        else: st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
+
+        st.markdown("##### 📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
+        if not fg_stock_df.empty:
+            fg_big = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"]["Clean_Qty"].sum()
+            fg_small = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"]["Clean_Qty"].sum()
+            fg_mix = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"]["Clean_Qty"].sum()
+            fg_f = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"]["Clean_Qty"].sum()
+
+            fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+            with fc1: st.metric(label="FG: Big", value=f"{fg_big:,.2f}")
+            with fc2: st.metric(label="FG: Small", value=f"{fg_small:,.2f}")
+            with fc3: st.metric(label="FG: Mix", value=f"{fg_mix:,.2f}")
+            with fc4: st.metric(label="FG: F", value=f"{fg_f:,.2f}")
+            with fc5: st.metric(label="FG Total", value=f"{total_fg:,.2f}")
+            st.dataframe(format_df_quantity(fg_stock_df), use_container_width=True)
+        else: st.info("ไม่มีรายการสินค้า FG ในคลังขณะนี้")
     else: 
         st.warning("ยังไม่มีข้อมูลในระบบ")
 # ==========================================
