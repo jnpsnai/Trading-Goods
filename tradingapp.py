@@ -645,6 +645,13 @@ elif menu == "📝 Trading Goods Registration":
             
             sheet.append_row(values=row_to_insert, value_input_option='USER_ENTERED')
             get_cached_data.clear()
+            
+            # ✨ เพิ่มส่วนนี้: ล้างค่า Checkbox 'To be decided' ที่ค้างใน Session State ทิ้ง
+            keys_to_clear = ["reg_tbd_insp", "reg_insp", "reg_tbd_ir", "reg_ir", "reg_tbd_ship", "reg_ship", "reg_tbd_type", "reg_type", "reg_rec_dt"]
+            for k in keys_to_clear:
+                if k in st.session_state:
+                    del st.session_state[k]
+                    
             st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
             time.sleep(1)
             st.rerun()
@@ -719,39 +726,43 @@ elif menu == "✏️ Edit Registration":
                         old_rec_date = str(current_data.get("Receive date", current_data.get("Date receive", current_data.get("Date Receive", ""))))
                         try: default_rec_dt = pd.to_datetime(old_rec_date, dayfirst=True).date() if old_rec_date and str(old_rec_date).strip() else date.today()
                         except: default_rec_dt = date.today()
-                        e_receive_date_str = str(st.date_input("8. Receive date", value=default_rec_dt, key="edit_receive_date"))
+                        e_receive_date_str = str(st.date_input("8. Receive date", value=default_rec_dt, key=f"edit_receive_date_{matched_row_idx}"))
 
                         old_qty = float(current_data.get("Clean_Qty", 0.0))
                         e_qty = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1, value=old_qty)
-                        e_remark_qty = st.text_input("Remark Qty", value=str(current_data.get("Remark Qty", "")), key="edit_remark_qty")
+                        e_remark_qty = st.text_input("Remark Qty", value=str(current_data.get("Remark Qty", "")), key=f"edit_remark_qty_{matched_row_idx}")
 
                         old_insp = str(current_data.get("Inspection Req.", "No"))
                         insp_con = st.container()
-                        e_is_tbd_insp = st.checkbox("To be decided", value=(old_insp == "To be decided"), key=f"edit_tbd_insp")
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
+                        e_is_tbd_insp = st.checkbox("To be decided", value=(old_insp == "To be decided"), key=f"edit_tbd_insp_{matched_row_idx}")
                         insp_opts = ["Yes", "No"]
-                        e_insp_val = insp_con.selectbox("10. Inspection Req.", insp_opts, index=insp_opts.index(old_insp) if old_insp in insp_opts else 0, disabled=e_is_tbd_insp, key=f"edit_insp")
+                        e_insp_val = insp_con.selectbox("10. Inspection Req.", insp_opts, index=insp_opts.index(old_insp) if old_insp in insp_opts else 0, disabled=e_is_tbd_insp, key=f"edit_insp_{matched_row_idx}")
                         e_insp = "To be decided" if e_is_tbd_insp else e_insp_val
 
                         old_ir = str(current_data.get("IR Req.", "No"))
                         ir_con = st.container()
-                        e_is_tbd_ir = st.checkbox("To be decided", value=(old_ir == "To be decided"), key=f"edit_tbd_ir")
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
+                        e_is_tbd_ir = st.checkbox("To be decided", value=(old_ir == "To be decided"), key=f"edit_tbd_ir_{matched_row_idx}")
                         ir_opts = ["Yes", "No"]
-                        e_ir_val = ir_con.selectbox("11. IR Req.", ir_opts, index=ir_opts.index(old_ir) if old_ir in ir_opts else 0, disabled=e_is_tbd_ir, key=f"edit_ir")
+                        e_ir_val = ir_con.selectbox("11. IR Req.", ir_opts, index=ir_opts.index(old_ir) if old_ir in ir_opts else 0, disabled=e_is_tbd_ir, key=f"edit_ir_{matched_row_idx}")
                         e_ir = "To be decided" if e_is_tbd_ir else e_ir_val
 
                         old_date = str(current_data.get("Shipment date", ""))
                         ship_con = st.container()
-                        e_is_tbd_ship = st.checkbox("To be decided", value=(old_date == "To be decided"), key=f"edit_tbd_ship")
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
+                        e_is_tbd_ship = st.checkbox("To be decided", value=(old_date == "To be decided"), key=f"edit_tbd_ship_{matched_row_idx}")
                         try: default_dt = pd.to_datetime(old_date, dayfirst=True).date() if old_date != "To be decided" and old_date.strip() else date.today()
                         except: default_dt = date.today()
-                        e_ship_val = ship_con.date_input("12. Shipment date", value=default_dt, disabled=e_is_tbd_ship, key=f"edit_ship")
+                        e_ship_val = ship_con.date_input("12. Shipment date", value=default_dt, disabled=e_is_tbd_ship, key=f"edit_ship_{matched_row_idx}")
                         e_shipment_date = "To be decided" if e_is_tbd_ship else str(e_ship_val)
 
                         old_type = str(current_data.get("Type", ""))
                         type_con = st.container()
-                        e_is_tbd_type = st.checkbox("To be decided", value=(old_type == "To be decided"), key=f"edit_tbd_type")
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
+                        e_is_tbd_type = st.checkbox("To be decided", value=(old_type == "To be decided"), key=f"edit_tbd_type_{matched_row_idx}")
                         type_opts = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product"]
-                        e_type_val = type_con.selectbox("13. Type", type_opts, index=type_opts.index(old_type) if old_type in type_opts else 0, disabled=e_is_tbd_type, key=f"edit_type")
+                        e_type_val = type_con.selectbox("13. Type", type_opts, index=type_opts.index(old_type) if old_type in type_opts else 0, disabled=e_is_tbd_type, key=f"edit_type_{matched_row_idx}")
                         e_type = "To be decided" if e_is_tbd_type else e_type_val
 
                         status_opt = ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"]
