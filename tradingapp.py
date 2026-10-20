@@ -404,7 +404,7 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        # 🎨 ฟังก์ชันสร้างตาราง Matrix สรุปยอดตามสเกตช์ (Cultivar เป็นคอลัมน์ | Size เป็นแถว)
+        # 🎨 ฟังก์ชันสร้างตาราง Matrix แบบจัดกลุ่ม (ไม่เกิน 10 สายพันธุ์ต่อตาราง) พร้อมตกแต่งหัวตารางสีสวยงาม
         def render_matrix_table(target_df, section_title):
             st.subheader(section_title)
             if target_df.empty:
@@ -416,7 +416,6 @@ elif menu == "📊 Stock Summary & Details":
             matrix_data.loc[matrix_data["Cultivar Name"] == "", "Cultivar Name"] = "ไม่ระบุชื่อสายพันธุ์"
             matrix_data["Grade"] = matrix_data["Grade"].fillna("GENERAL").astype(str).str.strip().str.upper()
 
-            # สร้าง Pivot Table ให้ขนาด (Grade) เป็นแถว และชื่อสายพันธุ์ (Cultivar Name) เป็นคอลัมน์
             pivot_df = matrix_data.pivot_table(
                 index="Grade", 
                 columns="Cultivar Name", 
@@ -425,34 +424,62 @@ elif menu == "📊 Stock Summary & Details":
                 fill_value=0.0
             )
 
-            # บังคับให้มี 4 แถวมาตรฐานเสมอ (BIG, SMALL, MIX, F)
             standard_sizes = ["BIG", "SMALL", "MIX", "F"]
             for size in standard_sizes:
                 if size not in pivot_df.index:
                     pivot_df.loc[size] = 0.0
             
-            # จัดเรียงลำดับแถวตามมาตรฐาน และตัดแถวอื่นที่ไม่ใช่ออก (หรือเก็บไว้ต่อท้ายถ้ามี)
             existing_sizes = [s for s in standard_sizes if s in pivot_df.index]
             other_sizes = [s for s in pivot_df.index if s not in standard_sizes]
             pivot_df = pivot_df.loc[existing_sizes + other_sizes]
 
-            # แปลงตัวเลขในตารางให้มีคอมมา (,) และใส่ "-" ถ้าเป็น 0
-            formatted_pivot = pd.DataFrame(index=pivot_df.index)
-            for col in pivot_df.columns:
-                formatted_pivot[col] = pivot_df[col].apply(lambda x: f"{x:,.2f}" if x > 0 else "-")
+            # เพิ่มแถว TOTAL ด้านล่างสุดก่อนแบ่งกลุ่ม
+            total_series = pivot_df.sum(axis=0)
+            pivot_df.loc["TOTAL (ยอดรวม)"] = total_series
 
-            # เพิ่มแถว "ยอดรวมทั้งหมด (Total)" ด้านล่างสุด
-            total_row = []
-            for col in pivot_df.columns:
-                col_sum = pivot_df[col].sum()
-                total_row.append(f"{col_sum:,.2f}" if col_sum > 0 else "-")
-            formatted_pivot.loc["TOTAL (ยอดรวม)"] = total_row
+            # แบ่งรายชื่อสายพันธุ์ออกเป็นชุด ชุดละไม่เกิน 10 สายพันธุ์
+            all_cultivars = list(pivot_df.columns)
+            chunk_size = 10
+            cultivar_chunks = [all_cultivars[i:i + chunk_size] for i in range(0, len(all_cultivars), chunk_size)]
 
-            # เปลี่ยนชื่อ Index แถวให้ดูสวยงาม
-            formatted_pivot.index.name = "Size / Grade"
-            
-            # แสดงผลตารางด้วย Streamlit
-            st.dataframe(formatted_pivot, use_container_width=True)
+            for chunk_idx, chunk_cols in enumerate(cultivar_chunks):
+                if len(cultivar_chunks) > 1:
+                    st.markdown(f"**📄 ส่วนที่ {chunk_idx + 1} (สายพันธุ์ที่ {chunk_idx*chunk_size + 1} ถึง {min((chunk_idx+1)*chunk_size, len(all_cultivars))})**")
+
+                sub_pivot = pivot_df[chunk_cols].copy()
+
+                formatted_pivot = pd.DataFrame(index=sub_pivot.index)
+                for col in sub_pivot.columns:
+                    formatted_pivot[col] = sub_pivot[col].apply(lambda x: f"{x:,.2f}" if x > 0 else "-")
+
+                formatted_pivot.index.name = "Size / Grade"
+
+                # ใช้ Styler ตกแต่งหัวตารางให้เป็นสีเขียวพาสเทลเข้ม ตัวหนังสือใหญ่และหนาเด่นชัด
+                def style_matrix(df):
+                    return df.style.set_table_styles([
+                        {
+                            'selector': 'th',
+                            'props': [
+                                ('background-color', '#14532d'), 
+                                ('color', '#ffffff'), 
+                                ('font-size', '15px'), 
+                                ('font-weight', 'bold'),
+                                ('text-align', 'center'),
+                                ('padding', '10px 14px')
+                            ]
+                        },
+                        {
+                            'selector': 'td',
+                            'props': [
+                                ('font-size', '14px'),
+                                ('text-align', 'center'),
+                                ('padding', '8px 12px')
+                            ]
+                        }
+                    ])
+
+                st.dataframe(formatted_pivot.style.pipe(style_matrix), use_container_width=True)
+                st.markdown("<br>", unsafe_allow_html=True)
 
         # 🧪 แสดงตาราง Matrix ของหมวด WIP
         render_matrix_table(wip_stock_df, "🧪 ตารางสรุปยอด WIP แยกตามสายพันธุ์และขนาด (WIP Matrix Summary)")
@@ -464,7 +491,7 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ ไม่ซ่อน)
+        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ)
         st.subheader("📂 ตารางรายละเอียดสต็อกเชิงลึกทั้งหมด (Detailed Tables)")
         
         st.markdown("##### 🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
