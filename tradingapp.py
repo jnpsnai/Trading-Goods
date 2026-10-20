@@ -404,7 +404,7 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        # 🎨 ฟังก์ชันช่วยสร้าง Card แบบตามแบบที่คุณวาดมา
+        # 🎨 ฟังก์ชันสร้างการ์ดสวยงาม (แสดงครบ 4 ไซส์มาตรฐาน Big, Small, Mix, F)
         def render_category_cards(target_df, section_title):
             st.subheader(section_title)
             if target_df.empty:
@@ -414,11 +414,10 @@ elif menu == "📊 Stock Summary & Details":
             card_data = target_df.copy()
             card_data["Cultivar Name"] = card_data["Cultivar Name"].fillna("ไม่ระบุชื่อสายพันธุ์").astype(str).str.strip()
             card_data.loc[card_data["Cultivar Name"] == "", "Cultivar Name"] = "ไม่ระบุชื่อสายพันธุ์"
-            card_data["Grade"] = card_data["Grade"].fillna("General").astype(str).str.strip().str.upper()
+            card_data["Grade"] = card_data["Grade"].fillna("GENERAL").astype(str).str.strip().str.upper()
 
             unique_cultivars = sorted(card_data["Cultivar Name"].unique())
             
-            # วนลูปสร้างการ์ด (แสดงแถวละ 3 การ์ด)
             card_cols = st.columns(3)
             for idx, cultivar in enumerate(unique_cultivars):
                 sub_df = card_data[card_data["Cultivar Name"] == cultivar]
@@ -426,32 +425,30 @@ elif menu == "📊 Stock Summary & Details":
                 
                 grade_agg = sub_df.groupby("Grade")["Clean_Qty"].sum().to_dict()
 
-                # สร้าง HTML กล่องย่อยด้านล่างสำหรับแต่ละ Size (ตามแบบในรูป)
+                # บังคับแสดง 4 ไซส์หลักเสมอตามลำดับ
+                standard_sizes = ["BIG", "SMALL", "MIX", "F"]
                 size_boxes_html = ""
-                for g_name, g_val in grade_agg.items():
-                    if g_val > 0:
-                        size_boxes_html += f"""
-                        <div style="flex: 1; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 4px; text-align: center; min-width: 70px;">
-                            <div style="font-size: 11px; font-weight: bold; color: #475569;">{g_name}</div>
-                            <div style="font-size: 12px; font-weight: bold; color: #0f172a;">{g_val:,.0f} g</div>
-                        </div>
-                        """
+                for size in standard_sizes:
+                    val = grade_agg.get(size, 0.0)
+                    val_str = f"{val:,.0f} g" if val > 0 else "-"
+                    size_boxes_html += f"""
+                    <div style="flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 4px; text-align: center; min-width: 65px;">
+                        <div style="font-size: 11px; font-weight: 600; color: #64748b; margin-bottom: 2px;">{size}</div>
+                        <div style="font-size: 13px; font-weight: bold; color: #1e293b;">{val_str}</div>
+                    </div>
+                    """
 
-                if not size_boxes_html:
-                    size_boxes_html = '<div style="font-size: 12px; color: #94a3b8; text-align: center; width: 100%;">ไม่มีข้อมูล Size</div>'
-
-                # ประกอบร่างเป็นการ์ดใหญ่ (ตามแบบสเกตช์ของคุณ)
                 with card_cols[idx % 3]:
                     st.markdown(
                         f"""
-                        <div style="background-color: #ffffff; padding: 16px; border-radius: 12px; border: 2px solid #e2e8f0; box-shadow: 0 4px 6px rgba(0,0,0,0.03); margin-bottom: 16px;">
-                            <!-- กล่องบน: ชื่อสายพันธุ์ และ ยอดรวม -->
-                            <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 12px; margin-bottom: 12px; text-align: center;">
-                                <div style="font-size: 16px; font-weight: bold; color: #166534; margin-bottom: 4px;">🌱 {cultivar}</div>
-                                <div style="font-size: 13px; color: #374151;">ยอดรวม <span style="font-size: 18px; font-weight: bold; color: #047857;">{c_total:,.2f}</span> g</div>
+                        <div style="background-color: #ffffff; padding: 18px; border-radius: 14px; border: 1px solid #cbd5e1; box-shadow: 0 4px 6px rgba(0,0,0,0.02); margin-bottom: 16px;">
+                            <!-- กล่องบน: ชื่อสายพันธุ์ (ตัวหนังสือใหญ่ขึ้น) และ ยอดรวม -->
+                            <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #bbf7d0; border-radius: 10px; padding: 14px; margin-bottom: 12px; text-align: center;">
+                                <div style="font-size: 20px; font-weight: 700; color: #14532d; margin-bottom: 6px; letter-spacing: 0.3px;">🌱 {cultivar}</div>
+                                <div style="font-size: 13px; color: #374151; font-weight: 500;">ยอดรวม <span style="font-size: 18px; font-weight: 800; color: #166534;">{c_total:,.2f}</span> g</div>
                             </div>
-                            <!-- กล่องล่าง: แผงปุ่มแสดง Size ย่อย -->
-                            <div style="display: flex; gap: 6px; flex-wrap: wrap; justify-content: center;">
+                            <!-- กล่องล่าง: แสดง 4 ไซส์มาตรฐานเรียงสวยงาม -->
+                            <div style="display: flex; gap: 6px; justify-content: space-between;">
                                 {size_boxes_html}
                             </div>
                         </div>
@@ -469,7 +466,7 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ ไม่ซ่อนแล้ว ตามที่คุณต้องการ)
+        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ ไม่ซ่อนแล้ว)
         st.subheader("📂 ตารางรายละเอียดสต็อกเชิงลึกทั้งหมด (Detailed Tables)")
         
         st.markdown("##### 🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
