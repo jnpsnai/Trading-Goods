@@ -406,7 +406,9 @@ elif menu == "📊 Stock Summary & Details":
 
         import math
 
-        # 🎨 ฟังก์ชันสร้างตาราง Matrix แบบแบ่งครึ่งจำนวนสายพันธุ์ พร้อมตกแต่งสีสันสวยงามสะอาดตา
+        import math
+
+        # 🎨 ฟังก์ชันสร้างตาราง Matrix (เงื่อนไข < 10 สายพันธุ์ไม่แบ่งครึ่ง + สีเขียวพาสเทลสบายตา)
         def render_matrix_table(target_df, section_title):
             st.subheader(section_title)
             if target_df.empty:
@@ -435,15 +437,20 @@ elif menu == "📊 Stock Summary & Details":
             other_sizes = [s for s in pivot_df.index if s not in standard_sizes]
             pivot_df = pivot_df.loc[existing_sizes + other_sizes]
 
-            # เพิ่มแถว TOTAL ด้านล่างสุดก่อนแบ่งกลุ่ม
+            # เพิ่มแถว TOTAL ด้านล่างสุด
             total_series = pivot_df.sum(axis=0)
             pivot_df.loc["TOTAL (ยอดรวม)"] = total_series
 
-            # แบ่งครึ่งจำนวนสายพันธุ์ที่มี (หาร 2 ให้เป็น 2 ส่วนเท่าๆ กัน)
             all_cultivars = list(pivot_df.columns)
             total_cultivars = len(all_cultivars)
-            chunk_size = math.ceil(total_cultivars / 2) if total_cultivars > 0 else 1
-            cultivar_chunks = [all_cultivars[i:i + chunk_size] for i in range(0, total_cultivars, chunk_size)]
+
+            # ✨ เงื่อนไขใหม่: ถ้าไม่ถึง 10 สายพันธุ์ (< 10) จะไม่แบ่งครึ่ง แสดงตารางเดียวรวบยอด
+            if total_cultivars < 10:
+                cultivar_chunks = [all_cultivars]
+            else:
+                # ถ้าตั้งแต่ 10 สายพันธุ์ขึ้นไป แบ่งเป็น 2 ส่วนเท่าๆ กัน
+                chunk_size = math.ceil(total_cultivars / 2)
+                cultivar_chunks = [all_cultivars[i:i + chunk_size] for i in range(0, total_cultivars, chunk_size)]
 
             for chunk_idx, chunk_cols in enumerate(cultivar_chunks):
                 if len(cultivar_chunks) > 1:
@@ -457,26 +464,26 @@ elif menu == "📊 Stock Summary & Details":
 
                 formatted_pivot.index.name = "Size / Grade"
 
-                # 🛠️ ตกแต่งตารางให้สวยงามทันสมัย (แกน X และแกน Y หัวตารางสีสวยงาม อ่านง่ายสบายตา)
+                # 🛠️ ตกแต่งตารางด้วยโทนสีเขียวพาสเทลอ่อนๆ สบายตา (Soft Pastel Green)
                 def style_matrix(st_obj):
                     return st_obj.set_table_styles([
                         {
                             'selector': 'th',
                             'props': [
-                                ('background-color', '#1e293b'),  # สีเทาเข้มอมน้ำเงินทันสมัย (Slate)
-                                ('color', '#ffffff'), 
+                                ('background-color', '#dcfce7'),  # สีเขียวอ่อนพาสเทล (Pastel Green)
+                                ('color', '#14532d'),             # ตัวหนังสือเขียวเข้มตัดขอบชัดเจน
                                 ('font-size', '14px'), 
                                 ('font-weight', 'bold'),
                                 ('text-align', 'center'),
                                 ('padding', '10px 12px'),
-                                ('border', '1px solid #334155')
+                                ('border', '1px solid #bbf7d0')
                             ]
                         },
                         {
                             'selector': 'th.row_heading',
                             'props': [
-                                ('background-color', '#0f172a'),  # แกน Y (Index) เข้มขึ้นเล็กน้อยเพื่อความโดดเด่น
-                                ('color', '#ffffff'),
+                                ('background-color', '#bbf7d0'),  # แกน Y (Index) เขียวพาสเทลกลมกลืน
+                                ('color', '#14532d'),
                                 ('text-align', 'center'),
                                 ('font-weight', 'bold')
                             ]
@@ -493,7 +500,8 @@ elif menu == "📊 Stock Summary & Details":
                     ])
 
                 st.dataframe(formatted_pivot.style.pipe(style_matrix), use_container_width=True)
-                st.markdown("<br>", unsafe_allow_html=True)
+                st.markdown("<br>", unsafe_allow_html=True)        
+        
         # 🧪 แสดงตาราง Matrix ของหมวด WIP
         render_matrix_table(wip_stock_df, "🧪 ตารางสรุปยอด WIP แยกตามสายพันธุ์และขนาด (WIP Matrix Summary)")
 
