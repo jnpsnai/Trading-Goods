@@ -125,19 +125,39 @@ def format_df_quantity(df):
         for col in df_copy.columns:
             col_str = str(col).lower()
             
-            # ✨ 1. จัดการ Format วันที่ทั้งหมดให้เป็น DD/MM/YYYY (ตัดเวลาออกทั้งหมด)
+            # ✨ 1. จัดการ Format วันที่แบบขั้นสูง (ดักจับและแก้ปัญหาวัน/เดือนสลับกัน)
             date_keywords = ["date", "วันที่", "timestamp"]
             if any(k in col_str for k in date_keywords):
                 def format_date(x):
                     if pd.isna(x) or str(x).strip() == "" or str(x).strip().lower() in ["to be decided", "tbd", "nan", "nat", "none"]:
                         return x
                     try:
-                        d_str = str(x).strip()
-                        # ใช้ dayfirst=True บังคับให้ Pandas อ่านวัน/เดือน/ปี อย่างถูกต้อง
-                        dt = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
+                        d_str = str(x).strip().split(" ")[0] # ตัดเวลาทิ้งก่อนเอามาวิเคราะห์
+                        
+                        import re
+                        # กรณี 1: ขึ้นต้นด้วยปี (เช่น 2026-10-24 หรือ 2026/10/24)
+                        if re.match(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}$', d_str):
+                            dt = pd.to_datetime(d_str)
+                        
+                        # กรณี 2: ขึ้นต้นด้วยวันหรือเดือน (เช่น 24/10/2026 หรือ 10/24/2026)
+                        elif re.match(r'^\d{1,2}[-/]\d{1,2}[-/]\d{4}$', d_str):
+                            parts = re.split(r'[-/]', d_str)
+                            p1, p2, p3 = int(parts[0]), int(parts[1]), int(parts[2])
+                            
+                            if p1 > 12: 
+                                # ตัวเลขแรกเกิน 12 แปลว่าวันขึ้นก่อนแน่นอน (DD/MM/YYYY)
+                                dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
+                            elif p2 > 12: 
+                                # ตัวเลขที่สองเกิน 12 แปลว่าเดือนขึ้นก่อนแน่นอน (MM/DD/YYYY)
+                                dt = pd.to_datetime(f"{p3}-{p1:02d}-{p2:02d}")
+                            else:
+                                # ถ้าคลุมเครือ (เช่น 05/06/2026) ให้ยึด DD/MM/YYYY เป็นมาตรฐานไทย
+                                dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
+                        else:
+                            # กรณีอื่นๆ ที่รูปแบบแปลกไป ให้ Pandas ลองเดา
+                            dt = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
                         
                         if pd.notna(dt):
-                            # บังคับแสดงแค่ วัน/เดือน/ปี ไม่ว่าคอลัมน์จะชื่ออะไร
                             return dt.strftime('%d/%m/%Y')
                         return x
                     except:
