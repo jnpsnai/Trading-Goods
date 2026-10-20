@@ -124,6 +124,27 @@ def format_df_quantity(df):
         df_copy = df.copy()
         for col in df_copy.columns:
             col_str = str(col).lower()
+            
+            # ✨ 1. จัดการ Format วันที่ทั้งหมดให้เป็น DD/MM/YYYY (ตัดเวลาออกทั้งหมด)
+            date_keywords = ["date", "วันที่", "timestamp"]
+            if any(k in col_str for k in date_keywords):
+                def format_date(x):
+                    if pd.isna(x) or str(x).strip() == "" or str(x).strip().lower() in ["to be decided", "tbd", "nan", "nat", "none"]:
+                        return x
+                    try:
+                        d_str = str(x).strip()
+                        # ใช้ dayfirst=True บังคับให้ Pandas อ่านวัน/เดือน/ปี อย่างถูกต้อง
+                        dt = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
+                        
+                        if pd.notna(dt):
+                            # บังคับแสดงแค่ วัน/เดือน/ปี ไม่ว่าคอลัมน์จะชื่ออะไร
+                            return dt.strftime('%d/%m/%Y')
+                        return x
+                    except:
+                        return x
+                df_copy[col] = df_copy[col].apply(format_date)
+
+            # 📦 2. จัดการลูกน้ำ (,) สำหรับคอลัมน์ตัวเลขและจำนวน
             keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ", "available", "wip", "fg"]
             is_target_col = any(k in col_str for k in keywords)
             ignore_kws = ["year", "ปี", "lot", "id", "เลข", "no.", "รหัส"]
@@ -144,6 +165,7 @@ def format_df_quantity(df):
                             except: return match.group(0)
                         return re.sub(r'\b\d+(?:\.\d+)?\b', repl, clean_str)
                 df_copy[col] = df_copy[col].apply(format_mixed)
+                
         return df_copy
     return df
 
