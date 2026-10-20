@@ -408,7 +408,9 @@ elif menu == "📊 Stock Summary & Details":
 
         import math
 
-        # 🎨 ฟังก์ชันสร้างตาราง Matrix (เงื่อนไข < 10 สายพันธุ์ไม่แบ่งครึ่ง + สีเขียวพาสเทลสบายตา)
+        import math
+
+        # 🎨 ฟังก์ชันสร้างตาราง Matrix ด้วย HTML Table (บังคับสีเขียวพาสเทลและขนาดตัวอักษรได้ 100%)
         def render_matrix_table(target_df, section_title):
             st.subheader(section_title)
             if target_df.empty:
@@ -444,11 +446,10 @@ elif menu == "📊 Stock Summary & Details":
             all_cultivars = list(pivot_df.columns)
             total_cultivars = len(all_cultivars)
 
-            # ✨ เงื่อนไขใหม่: ถ้าไม่ถึง 10 สายพันธุ์ (< 10) จะไม่แบ่งครึ่ง แสดงตารางเดียวรวบยอด
+            # เงื่อนไข: ถ้าไม่ถึง 10 สายพันธุ์ ไม่แบ่งครึ่ง
             if total_cultivars < 10:
                 cultivar_chunks = [all_cultivars]
             else:
-                # ถ้าตั้งแต่ 10 สายพันธุ์ขึ้นไป แบ่งเป็น 2 ส่วนเท่าๆ กัน
                 chunk_size = math.ceil(total_cultivars / 2)
                 cultivar_chunks = [all_cultivars[i:i + chunk_size] for i in range(0, total_cultivars, chunk_size)]
 
@@ -458,48 +459,35 @@ elif menu == "📊 Stock Summary & Details":
 
                 sub_pivot = pivot_df[chunk_cols].copy()
 
-                formatted_pivot = pd.DataFrame(index=sub_pivot.index)
+                # สร้างตาราง HTML เองเพื่อให้คุมสีและขนาดได้เป๊ะ 100%
+                html = """
+                <div style="overflow-x: auto; margin-bottom: 20px;">
+                <table style="width: 100%; border-collapse: collapse; background-color: #ffffff; font-family: sans-serif; font-size: 14px; border: 1px solid #cbd5e1;">
+                    <thead>
+                        <tr style="background-color: #dcfce7; color: #14532d;">
+                            <th style="padding: 12px; border: 1px solid #bbf7d0; text-align: center; font-weight: bold; font-size: 15px;">Size / Grade</th>
+                """
                 for col in sub_pivot.columns:
-                    formatted_pivot[col] = sub_pivot[col].apply(lambda x: f"{x:,.2f}" if x > 0 else "-")
+                    html += f'<th style="padding: 12px; border: 1px solid #bbf7d0; text-align: center; font-weight: bold; font-size: 15px;">{col}</th>'
+                html += "</tr></thead><tbody>"
 
-                formatted_pivot.index.name = "Size / Grade"
+                for idx, row_name in enumerate(sub_pivot.index):
+                    is_total = ("TOTAL" in str(row_name).upper())
+                    row_bg = "#f8fafc" if is_total else ("#ffffff" if idx % 2 == 0 else "#f9fafb")
+                    row_weight = "bold" if is_total else "normal"
+                    
+                    html += f'<tr style="background-color: {row_bg}; font-weight: {row_weight};">'
+                    # คอลัมน์แรก (แกน Y - Size)
+                    html += f'<td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; background-color: #bbf7d0; color: #14532d; font-weight: bold;">{row_name}</td>'
+                    
+                    for col in sub_pivot.columns:
+                        val = sub_pivot.loc[row_name, col]
+                        val_str = f"{val:,.2f}" if val > 0 else "-"
+                        html += f'<td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; color: #1e293b;">{val_str}</td>'
+                    html += "</tr>"
 
-                # 🛠️ ตกแต่งตารางด้วยโทนสีเขียวพาสเทลอ่อนๆ สบายตา (Soft Pastel Green)
-                def style_matrix(st_obj):
-                    return st_obj.set_table_styles([
-                        {
-                            'selector': 'th',
-                            'props': [
-                                ('background-color', '#dcfce7'),  # สีเขียวอ่อนพาสเทล (Pastel Green)
-                                ('color', '#14532d'),             # ตัวหนังสือเขียวเข้มตัดขอบชัดเจน
-                                ('font-size', '14px'), 
-                                ('font-weight', 'bold'),
-                                ('text-align', 'center'),
-                                ('padding', '10px 12px'),
-                                ('border', '1px solid #bbf7d0')
-                            ]
-                        },
-                        {
-                            'selector': 'th.row_heading',
-                            'props': [
-                                ('background-color', '#bbf7d0'),  # แกน Y (Index) เขียวพาสเทลกลมกลืน
-                                ('color', '#14532d'),
-                                ('text-align', 'center'),
-                                ('font-weight', 'bold')
-                            ]
-                        },
-                        {
-                            'selector': 'td',
-                            'props': [
-                                ('font-size', '13px'),
-                                ('text-align', 'center'),
-                                ('padding', '8px 10px'),
-                                ('border', '1px solid #e2e8f0')
-                            ]
-                        }
-                    ])
-
-                st.dataframe(formatted_pivot.style.pipe(style_matrix), use_container_width=True)
+                html += "</tbody></table></div>"
+                st.markdown(html, unsafe_allow_html=True)
                 st.markdown("<br>", unsafe_allow_html=True)        
         
         # 🧪 แสดงตาราง Matrix ของหมวด WIP
