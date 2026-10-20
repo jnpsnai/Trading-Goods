@@ -454,9 +454,9 @@ elif menu == "📊 Stock Summary & Details":
 
                 formatted_pivot.index.name = "Size / Grade"
 
-                # ใช้ Styler ตกแต่งหัวตารางให้เป็นสีเขียวพาสเทลเข้ม ตัวหนังสือใหญ่และหนาเด่นชัด
-                def style_matrix(df):
-                    return df.style.set_table_styles([
+                # 🛠️ แก้ไข: ใช้ st_obj ตรงๆ ไม่ต้องเรียก .style ซ้ำ
+                def style_matrix(st_obj):
+                    return st_obj.set_table_styles([
                         {
                             'selector': 'th',
                             'props': [
