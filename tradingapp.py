@@ -311,7 +311,7 @@ elif menu == "📊 Stock Summary & Details":
     data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
 
-   records_data = get_cached_data("packing", packing_records_sheet)
+    records_data = get_cached_data("packing", packing_records_sheet)
     df_packing_fg = pd.DataFrame()
     if records_data:
         df_pack_raw = pd.DataFrame(records_data)
