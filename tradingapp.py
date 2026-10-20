@@ -410,6 +410,8 @@ elif menu == "📊 Stock Summary & Details":
 
         import math
 
+        import math
+
         # 🎨 ฟังก์ชันสร้างตาราง Matrix ด้วย HTML Table (บังคับสีเขียวพาสเทลและขนาดตัวอักษรได้ 100%)
         def render_matrix_table(target_df, section_title):
             st.subheader(section_title)
