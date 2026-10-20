@@ -6,12 +6,13 @@ import pandas as pd
 import streamlit as st
 import re
 
-# --- 1. ตั้งค่าหน้าเว็บ Streamlit ให้เป็น Wide Mode ---
+# ==========================================
+# 1. ตั้งค่าหน้าเว็บ Streamlit (Wide Mode & CSS)
+# ==========================================
 st.set_page_config(
     page_title="Thai Stick Trading Portal", page_icon="🌱", layout="wide"
 )
 
-# --- 2. Custom CSS ---
 st.markdown(
     """
     <style>
@@ -30,9 +31,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- ฟังก์ชัน Cache ที่ปลอดภัยและ "แยกการจำของแต่ละชีต" อย่างเด็ดขาด ---
+# ==========================================
+# 2. ฟังก์ชัน Cache ที่ปลอดภัย (แยกจำแต่ละ Sheet เด็ดขาด)
+# ==========================================
 @st.cache_data(ttl=30, show_spinner=False)
-def get_cached_data(sheet_name, _sheet): # <--- เพิ่ม sheet_name เป็นตัวแปรแรก
+def get_cached_data(sheet_name, _sheet):
     try:
         rows = _sheet.get_all_values()
         if not rows or len(rows) <= 1:
@@ -42,7 +45,7 @@ def get_cached_data(sheet_name, _sheet): # <--- เพิ่ม sheet_name เ�
         data = []
         
         for r in rows[1:]:
-            # กรองบรรทัดที่ว่างเปล่าทิ้ง (ป้องกันตารางบวมจากเซลล์ว่าง)
+            # กรองบรรทัดที่ว่างเปล่าทิ้ง ป้องกันตารางบวม
             if not any(str(cell).strip() for cell in r):
                 continue
                 
@@ -56,7 +59,9 @@ def get_cached_data(sheet_name, _sheet): # <--- เพิ่ม sheet_name เ�
     except Exception as e:
         return []
 
-# --- 4. ฟังก์ชันเชื่อมต่อและตรวจสอบโครงสร้าง Google Sheets แบบเรียกครั้งเดียว (ประหยัด API) ---
+# ==========================================
+# 3. ฟังก์ชันเชื่อมต่อ Google Sheets (โหลดครั้งเดียว ประหยัดโควตา API)
+# ==========================================
 SHEET_NAME = "Trading Data Log"
 
 @st.cache_resource
@@ -70,10 +75,8 @@ def init_google_sheets(sheet_name):
     client = gspread.authorize(creds)
     sh = client.open(sheet_name)
     
-    # ดึงชีตทั้งหมดไว้ใน Cache
     main_sheet = sh.get_worksheet(0)
     
-    # ฟังก์ชันตัวช่วยสำหรับสร้างชีตถ้ายังไม่มี
     def get_or_create_worksheet(title, rows, cols, headers):
         try:
             ws = sh.worksheet(title)
@@ -82,13 +85,14 @@ def init_google_sheets(sheet_name):
             ws.append_row(headers, table_range="A1")
         return ws
 
+    # แทรก Supplier Name เข้าไปเป็นตำแหน่งที่ 3 (Index 2)
     packing_records_sheet = get_or_create_worksheet(
         "Packing_Records", "1000", "15", 
-        ["Timestamp", "Source WIP Lot", "Cultivar Name", "Export Name", "Generated FG Lot No.", "Grade", "Quantity", "Waste Qty", "Packing Date", "Note"]
+        ["Timestamp", "Source WIP Lot", "Supplier Name", "Cultivar Name", "Export Name", "Generated FG Lot No.", "Grade", "Quantity", "Waste Qty", "Packing Date", "Note"]
     )
     packing_log_sheet = get_or_create_worksheet(
         "Packing_Log", "1000", "10", 
-        ["Timestamp", "Source WIP Lot", "Cultivar", "Packed FG Name", "Grade & Qty Breakdown", "Total Packed Qty", "Waste Qty", "Packing Date", "Note"]
+        ["Timestamp", "Source WIP Lot", "Supplier Name", "Cultivar", "Packed FG Name", "Grade & Qty Breakdown", "Total Packed Qty", "Waste Qty", "Packing Date", "Note"]
     )
     shipped_sheet = get_or_create_worksheet(
         "Shipped_Out_Log", "1000", "12", 
@@ -106,10 +110,11 @@ def init_google_sheets(sheet_name):
         
     return client, sh, main_sheet, packing_records_sheet, packing_log_sheet, shipped_sheet
 
-# เรียกใช้งานแค่บรรทัดเดียว ประหยัดโควตา API สุดๆ
 client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet = init_google_sheets(SHEET_NAME)
 
-# --- ฟังก์ชันตัวช่วย (Helper Functions) ---
+# ==========================================
+# 4. ฟังก์ชันตัวช่วย (Helper Functions)
+# ==========================================
 def clean_quantity(val):
     try: return float(str(val).replace(",", "").strip())
     except: return 0.0
@@ -142,7 +147,9 @@ def format_df_quantity(df):
         return df_copy
     return df
 
-# --- 5. Sidebar เมนูด้านซ้าย ---
+# ==========================================
+# 5. Sidebar เมนูด้านซ้าย
+# ==========================================
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
 menu = st.sidebar.radio(
@@ -163,14 +170,13 @@ if menu == "🚨 Delivery Issue":
         st.markdown("แสดงรายการและสถานะความพร้อมในการจัดส่ง (ดึงจากแท็บ **Delivery_schedule**)")
     with col_head2:
         st.markdown("<br>", unsafe_allow_html=True)
-        with st.expander("🔗 Direct Google Sheets (Delivery_schedule)"):
-            pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del", placeholder="กรอกรหัสผ่าน")
-            if pwd == "tstd": st.markdown("[🟢 **คลิกที่นี่เพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
-            elif pwd != "": st.error("รหัสผ่านไม่ถูกต้อง ❌")
+        with st.expander("🔗 Direct Google Sheets"):
+            pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del")
+            if pwd == "tstd": st.markdown("[🟢 **คลิกเพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
 
     try:
         del_sheet = sh.worksheet("Delivery_schedule")
-        data_del = get_cached_data("delivery", del_sheet)
+        data_del = get_cached_data("delivery", del_sheet) 
         df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
     except gspread.exceptions.WorksheetNotFound:
         st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
@@ -235,12 +241,11 @@ if menu == "🚨 Delivery Issue":
                 
                 if st.form_submit_button("💾 บันทึกกำหนดการใหม่"):
                     if not selected_items:
-                        st.error("❌ กรุณาเลือกรายการอย่างน้อย 1 รายการก่อนทำการบันทึก")
+                        st.error("❌ กรุณาเลือกรายการอย่างน้อย 1 รายการ")
                     elif date_col:
                         headers = del_sheet.row_values(1)
                         if date_col in headers:
                             col_idx = headers.index(date_col) + 1 
-                            # 🚀 อัปเดตแบบ Batch (รวมเป็น Request เดียว ลดโควตา API)
                             cells_to_update = []
                             success_rows = []
                             for sel in selected_items:
@@ -249,7 +254,7 @@ if menu == "🚨 Delivery Issue":
                                 success_rows.append(str(target_row))
                             
                             del_sheet.update_cells(cells_to_update)
-                            get_cached_data.clear() # เคลียร์ cache
+                            get_cached_data.clear() 
                             st.success(f"✅ อัปเดตวันจัดส่งใหม่เป็น {new_date} สำหรับบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว!")
                             time.sleep(1)
                             st.rerun()
@@ -305,9 +310,8 @@ if menu == "🚨 Delivery Issue":
 # ==========================================
 elif menu == "📊 Stock Summary & Details":
     st.title("📊 Stock Summary & Details")
-    st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) โดยดึงข้อมูล FG จากทั้งหน้า Goods Registration และ Packing Module")
+    st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock)")
 
-    # 🚀 ใช้ get_cached_data แทน get_all_records() เพื่อไม่ให้กินโควตา
     data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
 
@@ -318,7 +322,7 @@ elif menu == "📊 Stock Summary & Details":
         converted_rows = []
         for _, row in df_pack_raw.iterrows():
             converted_rows.append({
-                "Cultivar Name": row.get("Cultivar Name", ""), "Supplier Name": "", "Supplier Lot. No.": row.get("Source WIP Lot", ""),
+                "Cultivar Name": row.get("Cultivar Name", ""), "Supplier Name": row.get("Supplier Name", ""), "Supplier Lot. No.": row.get("Source WIP Lot", ""),
                 "Export Name": row.get("Export Name", ""), "THAI STICK Lot. No.": row.get("Generated FG Lot No.", ""),
                 "Category": "FG (Finished Goods)", "Grade": row.get("Grade", ""), "Receive date": row.get("Packing Date", ""),
                 "Quantity": clean_quantity(row.get("Quantity", 0)), "Remark Qty": "", "Inspection Req.": "No", "IR Req.": "No",
@@ -395,18 +399,13 @@ elif menu == "📊 Stock Summary & Details":
 # ==========================================
 elif menu == "📈 Monthly Report":
     st.title("📈 Monthly Report (รายงานสรุปผลการดำเนินงานรายเดือน)")
-    st.markdown(
-        "เลือกเดือนและปีที่ต้องการตรวจสอบรายงานสต็อกเคลื่อนไหวและประวัติการส่งออก (ค่าเริ่มต้นจะแสดงข้อมูลของเดือนปัจจุบัน)"
-    )
+    st.markdown("เลือกเดือนและปีที่ต้องการตรวจสอบรายงานสต็อกเคลื่อนไหวและประวัติการส่งออก")
 
     today = date.today()
-    current_year = today.year
-    current_month = today.month
-
     col_y, col_m = st.columns(2)
     with col_y:
         year_options = [2026, 2025, 2024, 2023]
-        default_year_idx = year_options.index(current_year) if current_year in year_options else 0
+        default_year_idx = year_options.index(today.year) if today.year in year_options else 0
         selected_year = st.selectbox("เลือกปี (Year)", year_options, index=default_year_idx, key="rep_year")
         
     with col_m:
@@ -415,7 +414,7 @@ elif menu == "📈 Monthly Report":
             "พฤษภาคม (05)": 5, "มิถุนายน (06)": 6, "กรกฎาคม (07)": 7, "สิงหาคม (08)": 8,
             "กันยายน (09)": 9, "ตุลาคม (10)": 10, "พฤศจิกายน (11)": 11, "ธันวาคม (12)": 12,
         }
-        default_month_idx = current_month - 1
+        default_month_idx = today.month - 1
         selected_month_label = st.selectbox("เลือกเดือน (Month)", list(months_dict.keys()), index=default_month_idx, key="rep_month")
         selected_month_num = months_dict[selected_month_label]
 
@@ -427,18 +426,14 @@ elif menu == "📈 Monthly Report":
     ])
 
     def parse_robust_date(date_val):
-        if not date_val or not str(date_val).strip():
-            return pd.NaT
+        if not date_val or not str(date_val).strip(): return pd.NaT
         d_str = str(date_val).strip()
         try:
             dt = pd.to_datetime(d_str, errors='coerce')
-            if pd.isna(dt):
-                dt = pd.to_datetime(d_str, format='%d/%m/%Y', errors='coerce')
+            if pd.isna(dt): dt = pd.to_datetime(d_str, format='%d/%m/%Y', errors='coerce')
             return dt
-        except:
-            return pd.NaT
+        except: return pd.NaT
 
-    # 🚀 ใช้ get_cached_data แทนการดึงสด เพื่อป้องกันติด API Limit
     shipped_data = get_cached_data("shipped", shipped_sheet)
     df_shipped = pd.DataFrame(shipped_data) if shipped_data else pd.DataFrame()
     if not df_shipped.empty:
@@ -491,8 +486,7 @@ elif menu == "📈 Monthly Report":
             df_main_rep.columns = [str(c).strip() for c in df_main_rep.columns]
             for _, r in df_main_rep.iterrows():
                 lot_no = str(r.get("THAI STICK Lot. No.", "")).strip()
-                if not lot_no:
-                    lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+                if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
                     
                 cat = str(r.get("Category", "")).lower()
                 curr_qty = clean_quantity(r.get("Quantity", 0))
@@ -502,10 +496,8 @@ elif menu == "📈 Monthly Report":
                 events.append({"date": rec_date, "type": "inbound", "cat": "wip" if "wip" in cat else "fg", "qty": original_qty})
 
         month_start = pd.to_datetime(f"{selected_year}-{selected_month_num:02d}-01")
-        if selected_month_num == 12:
-            month_end = pd.to_datetime(f"{selected_year+1}-01-01")
-        else:
-            month_end = pd.to_datetime(f"{selected_year}-{selected_month_num+1:02d}-01")
+        if selected_month_num == 12: month_end = pd.to_datetime(f"{selected_year+1}-01-01")
+        else: month_end = pd.to_datetime(f"{selected_year}-{selected_month_num+1:02d}-01")
 
         wip_beginning, fg_beginning = 0.0, 0.0
         wip_inbound, fg_inbound = 0.0, 0.0
@@ -535,17 +527,14 @@ elif menu == "📈 Monthly Report":
 
         wip_beginning = max(0.0, wip_beginning)
         fg_beginning = max(0.0, fg_beginning)
-
         wip_ending = max(0.0, wip_beginning + wip_inbound - wip_outbound)
         fg_ending = max(0.0, fg_beginning + fg_inbound - fg_outbound)
 
         has_wip_activity = (wip_inbound > 0) or (wip_outbound > 0) or (wip_beginning > 0)
         has_fg_activity = (fg_inbound > 0) or (fg_outbound > 0) or (fg_beginning > 0)
 
-        if not has_wip_activity:
-            st.warning(f"⚠️ **WIP:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
-        if not has_fg_activity:
-            st.warning(f"⚠️ **FG:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
+        if not has_wip_activity: st.warning(f"⚠️ **WIP:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
+        if not has_fg_activity: st.warning(f"⚠️ **FG:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
 
         summary_report_data = [
             {
@@ -590,15 +579,12 @@ elif menu == "📝 Trading Goods Registration":
     with col_head1:
         st.title("📝 Trading Goods Registration")
         st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
-    
     with col_head2:
         st.markdown("<br>", unsafe_allow_html=True)
         with st.expander("🔗 Direct Google Sheets (Multiple Batch)"):
-            pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd", placeholder="กรอกรหัสผ่านเพื่อแสดงลิงก์")
-            if pwd == "tstd":
-                st.markdown("[🟢 **คลิกที่นี่เพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit?gid=0#gid=0)")
-            elif pwd != "":
-                st.error("รหัสผ่านไม่ถูกต้อง ❌")
+            pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd", placeholder="กรอกรหัสผ่าน")
+            if pwd == "tstd": st.markdown("[🟢 **คลิกเพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit?gid=0#gid=0)")
+            elif pwd != "": st.error("รหัสผ่านไม่ถูกต้อง ❌")
 
     with st.form("trading_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
@@ -648,30 +634,17 @@ elif menu == "📝 Trading Goods Registration":
                 "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
                 "Shipment date", "Type", "Status", "Packing date"
             ]
-            
             row_dict = {
-                "Cultivar Name": cultivar_name, 
-                "Supplier Name": supplier_name, 
-                "Supplier Lot. No.": supplier_lot,
-                "Export Name": export_name, 
-                "THAI STICK Lot. No.": thai_stick_lot, 
-                "Category": category, 
-                "Grade": grade,
-                "Receive date": receive_date_str, 
-                "Quantity": float(quantity),
-                "Remark Qty": remark_qty,
-                "Inspection Req.": inspection_req, 
-                "IR Req.": ir_req, 
-                "Shipment date": shipment_date,
-                "Type": prod_type, 
-                "Status": status, 
-                "Packing date": "",
+                "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
+                "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
+                "Receive date": receive_date_str, "Quantity": float(quantity), "Remark Qty": remark_qty,
+                "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
+                "Type": prod_type, "Status": status, "Packing date": "",
             }
-            
             row_to_insert = [row_dict.get(h, "") for h in latest_headers]
             
             sheet.append_row(values=row_to_insert, value_input_option='USER_ENTERED')
-            get_cached_data.clear() # เคลียร์ cache ข้อมูลทันทีหลังเขียนเสร็จ
+            get_cached_data.clear()
             st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
             time.sleep(1)
             st.rerun()
@@ -715,11 +688,7 @@ elif menu == "✏️ Edit Registration":
                 
                 disp = f"Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
                 edit_options.append(disp)
-                edit_map[disp] = {
-                    "row_idx": row_idx,
-                    "lot_no": lot_no,
-                    "df_index": df_idx
-                }
+                edit_map[disp] = {"row_idx": row_idx, "lot_no": lot_no, "df_index": df_idx}
 
             selected_disp = st.selectbox("🔍 เลือกข้อมูลที่ต้องการแก้ไข (Lot No. & Size)", edit_options)
 
@@ -807,7 +776,7 @@ elif menu == "✏️ Edit Registration":
                         col_end_letter = chr(64 + len(latest_headers)).upper()
                         
                         sheet.update(range_name=f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}", values=[updated_row_data])
-                        get_cached_data.clear() # เคลียร์ cache
+                        get_cached_data.clear()
                         st.success(f"อัปเดตข้อมูลของ Lot: {selected_lot} (Size: {e_grade}) เรียบร้อยแล้ว! 🎉")
                         time.sleep(1)
                         st.rerun()
@@ -860,7 +829,11 @@ elif menu == "📦 Packing Module":
                     qty = float(r["Clean_Qty"])
                     row_idx = r["Original_Row_Index"]
                     
-                    disp = f"[บรรทัด {row_idx}] Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
+                    # ✨ ดึง Supplier Name
+                    supplier_name = str(r.get("Supplier Name", "")).strip()
+                    if not supplier_name: supplier_name = "ไม่ระบุ"
+                    
+                    disp = f"[บรรทัด {row_idx}] Supplier: {supplier_name} | Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
 
                     wip_options.append(disp)
                     wip_map[disp] = {
@@ -868,6 +841,7 @@ elif menu == "📦 Packing Module":
                         "cultivar": cultivar,
                         "grade": grade,
                         "qty": qty,
+                        "supplier": supplier_name, 
                         "row_idx": row_idx,
                         "row_data": r.to_dict()
                     }
@@ -939,15 +913,20 @@ elif menu == "📦 Packing Module":
                                         "Shipment date", "Type", "Status", "Packing date"
                                     ]
                                     col_end_letter = chr(64 + len(latest_headers)).upper()
-                                    combined_source_lots = [] 
                                     
-                                    # หักลบสต็อกโดยดึงข้อมูลจาก Memory (ไม่ต้องยิงไปขอข้อมูล Sheet ซ้ำ)
+                                    combined_source_lots = [] 
+                                    combined_suppliers = [] # ✨ เก็บชื่อ Supplier
+                                    
                                     for disp, w_qty in wip_withdrawals.items():
                                         if w_qty > 0:
                                             info = wip_map[disp]
                                             row_idx = info["row_idx"]
                                             lot_no = info["lot_no"]
+                                            supplier = info.get("supplier", "ไม่ระบุ")
+                                            
                                             combined_source_lots.append(lot_no)
+                                            if supplier not in combined_suppliers:
+                                                combined_suppliers.append(supplier)
                                             
                                             r_dict = info["row_data"]
                                             remaining_wip = info["qty"] - w_qty
@@ -962,12 +941,14 @@ elif menu == "📦 Packing Module":
 
                                     source_lots_str = ", ".join(combined_source_lots) if combined_source_lots else "TS-MIX"
                                     base_lot = combined_source_lots[0] if combined_source_lots else "TS-MIX"
+                                    suppliers_str = ", ".join(combined_suppliers) if combined_suppliers else "ไม่ระบุ" # ✨ รวมชื่อ Supplier
 
                                     breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
                                     log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     
+                                    # ✨ บันทึก Log พร้อม Supplier Name
                                     packing_log_row = [
-                                        log_time, source_lots_str, default_fg_name, packed_fg_name, breakdown_str, 
+                                        log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, breakdown_str, 
                                         float(total_packed_output), float(waste_qty), packing_date_str, note
                                     ]
                                     packing_sheet.append_row(packing_log_row, value_input_option='USER_ENTERED')
@@ -980,13 +961,14 @@ elif menu == "📦 Packing Module":
                                             created_count += 1
                                             custom_fg_lot = f"{base_lot}-FG{created_count}-{g_type}"
                                             
+                                            # ✨ บันทึก Record พร้อม Supplier Name
                                             rec_row = [
-                                                log_time, source_lots_str, default_fg_name, packed_fg_name, custom_fg_lot, 
+                                                log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, custom_fg_lot, 
                                                 g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
                                             ]
                                             packing_records_sheet.append_row(rec_row, value_input_option='USER_ENTERED')
 
-                                    get_cached_data.clear() # เคลียร์ cache
+                                    get_cached_data.clear()
                                     st.success(f"✅ บันทึกสำเร็จ! นำ WIP จำนวน {total_withdraw:,.2f} g ไปแพ็ก และสร้าง Lot FG ใหม่ {created_count} รายการ 🎉")
                                     time.sleep(1)
                                     st.rerun()
@@ -1129,10 +1111,12 @@ elif menu == "🚚 Shipped Out Module":
                         sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[row_values])
 
                     elif source == "packing_records":
-                        all_pack_records = get_cached_data(packing_records_sheet)
+                        all_pack_records = get_cached_data("packing", packing_records_sheet)
                         if row_idx and (row_idx - 2) < len(all_pack_records):
                             current_qty = clean_quantity(all_pack_records[row_idx - 2].get("Quantity", 0))
-                            packing_records_sheet.update_cell(row_idx, 7, max(0.0, current_qty - qty))
+                            
+                            # ✨ อัปเดตที่คอลัมน์ 8 เพราะแทรก Supplier เข้ามาในคอลัมน์ C ทำให้ Quantity ขยับไปอยู่คอลัมน์ H
+                            packing_records_sheet.update_cell(row_idx, 8, max(0.0, current_qty - qty))
 
                     shipped_sheet.append_row([
                         log_time, item["category"], item["lot_no"], item["product"], item["grade"], str(qty),
@@ -1140,7 +1124,7 @@ elif menu == "🚚 Shipped Out Module":
                     ], table_range="A1")
                     success_count += 1
 
-                get_cached_data.clear() # เคลียร์ cache
+                get_cached_data.clear()
                 st.success(f"✅ บันทึกการส่งออกสำเร็จทั้งหมด {success_count} รายการและตัดสต็อกต้นทางเรียบร้อยแล้ว! 🎉")
                 time.sleep(1)
                 st.rerun()
