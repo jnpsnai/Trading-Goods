@@ -352,7 +352,7 @@ if menu == "🚨 Delivery Issue":
 # ==========================================
 elif menu == "📊 Stock Summary & Details":
     st.title("📊 Stock Summary & Details")
-    st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) และการ์ดสรุปยอดแยกตามสายพันธุ์ (WIP & FG)")
+    st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) และตารางสรุปยอดเมทริกซ์แยกตามสายพันธุ์ (WIP & FG)")
 
     data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
@@ -404,69 +404,67 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        # 🎨 ฟังก์ชันสร้างการ์ดสวยงาม (แสดงครบ 4 ไซส์มาตรฐาน Big, Small, Mix, F)
-        def render_category_cards(target_df, section_title):
+        # 🎨 ฟังก์ชันสร้างตาราง Matrix สรุปยอดตามสเกตช์ (Cultivar เป็นคอลัมน์ | Size เป็นแถว)
+        def render_matrix_table(target_df, section_title):
             st.subheader(section_title)
             if target_df.empty:
                 st.info("ไม่มีข้อมูลในหมวดหมู่นี้")
                 return
 
-            card_data = target_df.copy()
-            card_data["Cultivar Name"] = card_data["Cultivar Name"].fillna("ไม่ระบุชื่อสายพันธุ์").astype(str).str.strip()
-            card_data.loc[card_data["Cultivar Name"] == "", "Cultivar Name"] = "ไม่ระบุชื่อสายพันธุ์"
-            card_data["Grade"] = card_data["Grade"].fillna("GENERAL").astype(str).str.strip().str.upper()
+            matrix_data = target_df.copy()
+            matrix_data["Cultivar Name"] = matrix_data["Cultivar Name"].fillna("ไม่ระบุชื่อสายพันธุ์").astype(str).str.strip()
+            matrix_data.loc[matrix_data["Cultivar Name"] == "", "Cultivar Name"] = "ไม่ระบุชื่อสายพันธุ์"
+            matrix_data["Grade"] = matrix_data["Grade"].fillna("GENERAL").astype(str).str.strip().str.upper()
 
-            unique_cultivars = sorted(card_data["Cultivar Name"].unique())
+            # สร้าง Pivot Table ให้ขนาด (Grade) เป็นแถว และชื่อสายพันธุ์ (Cultivar Name) เป็นคอลัมน์
+            pivot_df = matrix_data.pivot_table(
+                index="Grade", 
+                columns="Cultivar Name", 
+                values="Clean_Qty", 
+                aggfunc="sum", 
+                fill_value=0.0
+            )
+
+            # บังคับให้มี 4 แถวมาตรฐานเสมอ (BIG, SMALL, MIX, F)
+            standard_sizes = ["BIG", "SMALL", "MIX", "F"]
+            for size in standard_sizes:
+                if size not in pivot_df.index:
+                    pivot_df.loc[size] = 0.0
             
-            card_cols = st.columns(3)
-            for idx, cultivar in enumerate(unique_cultivars):
-                sub_df = card_data[card_data["Cultivar Name"] == cultivar]
-                c_total = sub_df["Clean_Qty"].sum()
-                
-                grade_agg = sub_df.groupby("Grade")["Clean_Qty"].sum().to_dict()
+            # จัดเรียงลำดับแถวตามมาตรฐาน และตัดแถวอื่นที่ไม่ใช่ออก (หรือเก็บไว้ต่อท้ายถ้ามี)
+            existing_sizes = [s for s in standard_sizes if s in pivot_df.index]
+            other_sizes = [s for s in pivot_df.index if s not in standard_sizes]
+            pivot_df = pivot_df.loc[existing_sizes + other_sizes]
 
-                # บังคับแสดง 4 ไซส์หลักเสมอตามลำดับ
-                standard_sizes = ["BIG", "SMALL", "MIX", "F"]
-                size_boxes_html = ""
-                for size in standard_sizes:
-                    val = grade_agg.get(size, 0.0)
-                    val_str = f"{val:,.0f} g" if val > 0 else "-"
-                    size_boxes_html += f"""
-                    <div style="flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 4px; text-align: center; min-width: 65px;">
-                        <div style="font-size: 11px; font-weight: 600; color: #64748b; margin-bottom: 2px;">{size}</div>
-                        <div style="font-size: 13px; font-weight: bold; color: #1e293b;">{val_str}</div>
-                    </div>
-                    """
+            # แปลงตัวเลขในตารางให้มีคอมมา (,) และใส่ "-" ถ้าเป็น 0
+            formatted_pivot = pd.DataFrame(index=pivot_df.index)
+            for col in pivot_df.columns:
+                formatted_pivot[col] = pivot_df[col].apply(lambda x: f"{x:,.2f}" if x > 0 else "-")
 
-                with card_cols[idx % 3]:
-                    st.markdown(
-                        f"""
-                        <div style="background-color: #ffffff; padding: 18px; border-radius: 14px; border: 1px solid #cbd5e1; box-shadow: 0 4px 6px rgba(0,0,0,0.02); margin-bottom: 16px;">
-                            <!-- กล่องบน: ชื่อสายพันธุ์ (ตัวหนังสือใหญ่ขึ้น) และ ยอดรวม -->
-                            <div style="background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border: 1px solid #bbf7d0; border-radius: 10px; padding: 14px; margin-bottom: 12px; text-align: center;">
-                                <div style="font-size: 20px; font-weight: 700; color: #14532d; margin-bottom: 6px; letter-spacing: 0.3px;">🌱 {cultivar}</div>
-                                <div style="font-size: 13px; color: #374151; font-weight: 500;">ยอดรวม <span style="font-size: 18px; font-weight: 800; color: #166534;">{c_total:,.2f}</span> g</div>
-                            </div>
-                            <!-- กล่องล่าง: แสดง 4 ไซส์มาตรฐานเรียงสวยงาม -->
-                            <div style="display: flex; gap: 6px; justify-content: space-between;">
-                                {size_boxes_html}
-                            </div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+            # เพิ่มแถว "ยอดรวมทั้งหมด (Total)" ด้านล่างสุด
+            total_row = []
+            for col in pivot_df.columns:
+                col_sum = pivot_df[col].sum()
+                total_row.append(f"{col_sum:,.2f}" if col_sum > 0 else "-")
+            formatted_pivot.loc["TOTAL (ยอดรวม)"] = total_row
 
-        # 🧪 แสดงการ์ดหมวด WIP
-        render_category_cards(wip_stock_df, "🧪 สรุปยอด WIP แยกตามสายพันธุ์และขนาด (WIP Cultivar Cards)")
+            # เปลี่ยนชื่อ Index แถวให้ดูสวยงาม
+            formatted_pivot.index.name = "Size / Grade"
+            
+            # แสดงผลตารางด้วย Streamlit
+            st.dataframe(formatted_pivot, use_container_width=True)
+
+        # 🧪 แสดงตาราง Matrix ของหมวด WIP
+        render_matrix_table(wip_stock_df, "🧪 ตารางสรุปยอด WIP แยกตามสายพันธุ์และขนาด (WIP Matrix Summary)")
 
         st.divider()
 
-        # 📦 แสดงการ์ดหมวด FG
-        render_category_cards(fg_stock_df, "📦 สรุปยอด FG (Finished Goods) แยกตามสายพันธุ์และขนาด (FG Cultivar Cards)")
+        # 📦 แสดงตาราง Matrix ของหมวด FG
+        render_matrix_table(fg_stock_df, "📦 ตารางสรุปยอด FG (Finished Goods) แยกตามสายพันธุ์และขนาด (FG Matrix Summary)")
 
         st.divider()
 
-        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ ไม่ซ่อนแล้ว)
+        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ ไม่ซ่อน)
         st.subheader("📂 ตารางรายละเอียดสต็อกเชิงลึกทั้งหมด (Detailed Tables)")
         
         st.markdown("##### 🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
