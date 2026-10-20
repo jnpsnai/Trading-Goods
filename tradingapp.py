@@ -404,7 +404,9 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        # 🎨 ฟังก์ชันสร้างตาราง Matrix แบบจัดกลุ่ม (ไม่เกิน 10 สายพันธุ์ต่อตาราง) พร้อมตกแต่งหัวตารางสีสวยงาม
+        import math
+
+        # 🎨 ฟังก์ชันสร้างตาราง Matrix แบบแบ่งครึ่งจำนวนสายพันธุ์ พร้อมตกแต่งสีสันสวยงามสะอาดตา
         def render_matrix_table(target_df, section_title):
             st.subheader(section_title)
             if target_df.empty:
@@ -437,14 +439,15 @@ elif menu == "📊 Stock Summary & Details":
             total_series = pivot_df.sum(axis=0)
             pivot_df.loc["TOTAL (ยอดรวม)"] = total_series
 
-            # แบ่งรายชื่อสายพันธุ์ออกเป็นชุด ชุดละไม่เกิน 10 สายพันธุ์
+            # แบ่งครึ่งจำนวนสายพันธุ์ที่มี (หาร 2 ให้เป็น 2 ส่วนเท่าๆ กัน)
             all_cultivars = list(pivot_df.columns)
-            chunk_size = 10
-            cultivar_chunks = [all_cultivars[i:i + chunk_size] for i in range(0, len(all_cultivars), chunk_size)]
+            total_cultivars = len(all_cultivars)
+            chunk_size = math.ceil(total_cultivars / 2) if total_cultivars > 0 else 1
+            cultivar_chunks = [all_cultivars[i:i + chunk_size] for i in range(0, total_cultivars, chunk_size)]
 
             for chunk_idx, chunk_cols in enumerate(cultivar_chunks):
                 if len(cultivar_chunks) > 1:
-                    st.markdown(f"**📄 ส่วนที่ {chunk_idx + 1} (สายพันธุ์ที่ {chunk_idx*chunk_size + 1} ถึง {min((chunk_idx+1)*chunk_size, len(all_cultivars))})**")
+                    st.markdown(f"**📄 ส่วนที่ {chunk_idx + 1} (สายพันธุ์ที่ {chunk_idx*chunk_size + 1} ถึง {min((chunk_idx+1)*chunk_size, total_cultivars)})**")
 
                 sub_pivot = pivot_df[chunk_cols].copy()
 
@@ -454,33 +457,43 @@ elif menu == "📊 Stock Summary & Details":
 
                 formatted_pivot.index.name = "Size / Grade"
 
-                # 🛠️ แก้ไข: ใช้ st_obj ตรงๆ ไม่ต้องเรียก .style ซ้ำ
+                # 🛠️ ตกแต่งตารางให้สวยงามทันสมัย (แกน X และแกน Y หัวตารางสีสวยงาม อ่านง่ายสบายตา)
                 def style_matrix(st_obj):
                     return st_obj.set_table_styles([
                         {
                             'selector': 'th',
                             'props': [
-                                ('background-color', '#14532d'), 
+                                ('background-color', '#1e293b'),  # สีเทาเข้มอมน้ำเงินทันสมัย (Slate)
                                 ('color', '#ffffff'), 
-                                ('font-size', '15px'), 
+                                ('font-size', '14px'), 
                                 ('font-weight', 'bold'),
                                 ('text-align', 'center'),
-                                ('padding', '10px 14px')
+                                ('padding', '10px 12px'),
+                                ('border', '1px solid #334155')
+                            ]
+                        },
+                        {
+                            'selector': 'th.row_heading',
+                            'props': [
+                                ('background-color', '#0f172a'),  # แกน Y (Index) เข้มขึ้นเล็กน้อยเพื่อความโดดเด่น
+                                ('color', '#ffffff'),
+                                ('text-align', 'center'),
+                                ('font-weight', 'bold')
                             ]
                         },
                         {
                             'selector': 'td',
                             'props': [
-                                ('font-size', '14px'),
+                                ('font-size', '13px'),
                                 ('text-align', 'center'),
-                                ('padding', '8px 12px')
+                                ('padding', '8px 10px'),
+                                ('border', '1px solid #e2e8f0')
                             ]
                         }
                     ])
 
                 st.dataframe(formatted_pivot.style.pipe(style_matrix), use_container_width=True)
                 st.markdown("<br>", unsafe_allow_html=True)
-
         # 🧪 แสดงตาราง Matrix ของหมวด WIP
         render_matrix_table(wip_stock_df, "🧪 ตารางสรุปยอด WIP แยกตามสายพันธุ์และขนาด (WIP Matrix Summary)")
 
