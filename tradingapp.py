@@ -1145,36 +1145,44 @@ elif menu == "🚚 Shipped Out Module":
                     qty = item["qty"]
 
                     if source == "main":
-                        latest_headers = [
-                            "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
-                            "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
-                            "Shipment date", "Type", "Status", "Packing date"
-                        ]
-                        r_dict = item["row_data"]
-                        current_qty = clean_quantity(r_dict.get("Quantity", 0))
+                        # ✨ แก้ไขใหม่: ดึง Header จาก Google Sheets จริงมาเทียบชื่อคอลัมน์ เพื่อป้องกันคอลัมน์เพี้ยน
+                        sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
+                        current_row_values = sheet.row_values(row_idx)
+                        
+                        # เติมช่องว่างให้ครบตามจำนวน Header
+                        while len(current_row_values) < len(sheet_headers):
+                            current_row_values.append("")
 
+                        row_dict = {sheet_headers[i]: current_row_values[i] for i in range(len(sheet_headers))}
+                        
+                        current_qty = clean_quantity(row_dict.get("Quantity", 0))
                         remaining_qty = max(0.0, current_qty - qty)
                         new_status = "Delivered" if remaining_qty <= 0 else ("Pending Packing" if "WIP" in item["category"] else "Trading Goods Received to Stock")
 
-                        r_dict["Quantity"] = str(remaining_qty)
-                        r_dict["Status"] = new_status
+                        # อัปเดตค่าเฉพาะคอลัมน์ Quantity และ Status ตามชื่อจริง
+                        row_dict["Quantity"] = str(remaining_qty)
+                        row_dict["Status"] = new_status
 
-                        row_values = [str(r_dict.get(h, "")) for h in latest_headers]
-                        col_end_letter = chr(64 + len(latest_headers)).upper()
-                        sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[row_values])
+                        # จัดเรียงข้อมูลกลับลง List ตามตำแหน่ง Header ปัจจุบันในชีต
+                        updated_row_values = [str(row_dict.get(h, "")) for h in sheet_headers]
+                        col_end_letter = chr(64 + len(sheet_headers)).upper()
+                        
+                        sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[updated_row_values], value_input_option='USER_ENTERED')
 
                     elif source == "packing_records":
+                        # ✨ แก้ไขใหม่: ค้นหาตำแหน่งคอลัมน์ Quantity จากชื่อ Header จริงใน Packing_Records
+                        pack_headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
+                        qty_col_idx = pack_headers.index("Quantity") + 1 if "Quantity" in pack_headers else 8
+                        
                         all_pack_records = get_cached_data("packing", packing_records_sheet)
                         if row_idx and (row_idx - 2) < len(all_pack_records):
                             current_qty = clean_quantity(all_pack_records[row_idx - 2].get("Quantity", 0))
-                            
-                            # ✨ อัปเดตที่คอลัมน์ 8 เพราะแทรก Supplier เข้ามาในคอลัมน์ C ทำให้ Quantity ขยับไปอยู่คอลัมน์ H
-                            packing_records_sheet.update_cell(row_idx, 8, max(0.0, current_qty - qty))
+                            packing_records_sheet.update_cell(row_idx, qty_col_idx, max(0.0, current_qty - qty))
 
                     shipped_sheet.append_row([
                         log_time, item["category"], item["lot_no"], item["product"], item["grade"], str(qty),
                         consignee, client_name, shipping_reason, shipment_date_str, note_ship
-                    ], table_range="A1")
+                    ], value_input_option='USER_ENTERED')
                     success_count += 1
 
                 get_cached_data.clear()
