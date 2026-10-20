@@ -170,7 +170,7 @@ if menu == "🚨 Delivery Issue":
 
     try:
         del_sheet = sh.worksheet("Delivery_schedule")
-       data_del = get_cached_data("delivery", del_sheet)
+        data_del = get_cached_data("delivery", del_sheet)
         df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
     except gspread.exceptions.WorksheetNotFound:
         st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
