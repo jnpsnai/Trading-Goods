@@ -30,20 +30,28 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# --- 3. ฟังก์ชัน Cache การดึงข้อมูลให้ปลอดภัย (ดึงเป็น List of Dict) ---
-@st.cache_data(ttl=30)
-def get_cached_data(_sheet):
+# --- ฟังก์ชัน Cache ที่ปลอดภัยและ "แยกการจำของแต่ละชีต" อย่างเด็ดขาด ---
+@st.cache_data(ttl=30, show_spinner=False)
+def get_cached_data(sheet_name, _sheet): # <--- เพิ่ม sheet_name เป็นตัวแปรแรก
     try:
         rows = _sheet.get_all_values()
         if not rows or len(rows) <= 1:
             return []
+        
         headers = [str(h).strip() for h in rows[0]]
         data = []
+        
         for r in rows[1:]:
+            # กรองบรรทัดที่ว่างเปล่าทิ้ง (ป้องกันตารางบวมจากเซลล์ว่าง)
+            if not any(str(cell).strip() for cell in r):
+                continue
+                
             while len(r) < len(headers):
                 r.append("")
+            
             row_dict = {headers[i]: r[i] for i in range(len(headers))}
             data.append(row_dict)
+            
         return data
     except Exception as e:
         return []
@@ -162,7 +170,7 @@ if menu == "🚨 Delivery Issue":
 
     try:
         del_sheet = sh.worksheet("Delivery_schedule")
-        data_del = get_cached_data(del_sheet) # ใช้ cache แทนการยิง API
+       data_del = get_cached_data("delivery", del_sheet)
         df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
     except gspread.exceptions.WorksheetNotFound:
         st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
@@ -300,10 +308,10 @@ elif menu == "📊 Stock Summary & Details":
     st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) โดยดึงข้อมูล FG จากทั้งหน้า Goods Registration และ Packing Module")
 
     # 🚀 ใช้ get_cached_data แทน get_all_records() เพื่อไม่ให้กินโควตา
-    data_main = get_cached_data(sheet)
+    data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
 
-    records_data = get_cached_data(packing_records_sheet)
+   records_data = get_cached_data("packing", packing_records_sheet)
     df_packing_fg = pd.DataFrame()
     if records_data:
         df_pack_raw = pd.DataFrame(records_data)
@@ -431,7 +439,7 @@ elif menu == "📈 Monthly Report":
             return pd.NaT
 
     # 🚀 ใช้ get_cached_data แทนการดึงสด เพื่อป้องกันติด API Limit
-    shipped_data = get_cached_data(shipped_sheet)
+    shipped_data = get_cached_data("shipped", shipped_sheet)
     df_shipped = pd.DataFrame(shipped_data) if shipped_data else pd.DataFrame()
     if not df_shipped.empty:
         df_shipped.columns = [str(c).strip() for c in df_shipped.columns]
@@ -447,9 +455,9 @@ elif menu == "📈 Monthly Report":
     with rep_tab1:
         st.subheader(f"📅 รายงานความเคลื่อนไหวสต็อกประจำเดือน {selected_month_label} {selected_year}")
 
-        main_data = get_cached_data(sheet)
+        main_data = get_cached_data("main", sheet)
         df_main_rep = pd.DataFrame(main_data) if main_data else pd.DataFrame()
-        pack_data = get_cached_data(packing_records_sheet)
+        pack_data = get_cached_data("packing", packing_records_sheet)
         df_pack_rep = pd.DataFrame(pack_data) if pack_data else pd.DataFrame()
 
         events = []
@@ -675,7 +683,7 @@ elif menu == "✏️ Edit Registration":
     st.title("✏️ Edit Registration Data")
     st.markdown("ค้นหาและแก้ไขข้อมูลล็อตสินค้าที่เคยบันทึกไว้")
 
-    data = get_cached_data(sheet)
+    data = get_cached_data("main", sheet)
     if data:
         df_all = pd.DataFrame(data)
         df_all.columns = [str(c).strip() for c in df_all.columns]
@@ -812,7 +820,7 @@ elif menu == "✏️ Edit Registration":
 elif menu == "📦 Packing Module":
     st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
     
-    data = get_cached_data(sheet)
+    data = get_cached_data("main", sheet)
     if data:
         df = pd.DataFrame(data)
         df.columns = [str(c).strip() for c in df.columns]
@@ -985,7 +993,7 @@ elif menu == "📦 Packing Module":
 
     st.divider()
     st.subheader("📑 ประวัติการผลิตและรหัส Lot FG แยกเกรด (Packing Records Sheet)")
-    records_data = get_cached_data(packing_records_sheet)
+    records_data = get_cached_data("packing", packing_records_sheet)
     if records_data: st.dataframe(format_df_quantity(pd.DataFrame(records_data)), use_container_width=True)
 
 # ==========================================
@@ -995,10 +1003,10 @@ elif menu == "🚚 Shipped Out Module":
     st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
     st.markdown("บันทึกการส่งสินค้าออกทั้ง WIP และ FG (ดึงข้อมูลจากทั้งหน้า Trading Data และ Packing Records)")
 
-    data_main = get_cached_data(sheet)
+    data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
 
-    records_data = get_cached_data(packing_records_sheet)
+    records_data = get_cached_data("packing", packing_records_sheet)
     df_packing_fg = pd.DataFrame(records_data) if records_data else pd.DataFrame()
 
     combined_options = []
@@ -1139,5 +1147,5 @@ elif menu == "🚚 Shipped Out Module":
 
     st.divider()
     st.subheader("📑 ประวัติการส่งสินค้าออก (Shipped Out Log)")
-    shipped_data = get_cached_data(shipped_sheet)
+    shipped_data = get_cached_data("shipped", shipped_sheet)
     if shipped_data: st.dataframe(format_df_quantity(pd.DataFrame(shipped_data)), use_container_width=True)
