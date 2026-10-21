@@ -404,101 +404,149 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        import math
+        from html import escape
 
-        import math
+        # ใช้สีและรูปแบบเฉพาะ Matrix เพื่อแยก WIP / FG อย่างชัดเจน
+        st.markdown("""<style>
+        .stock-matrix { --accent: #b45309; --deep: #92400e; --tint: #fffbeb;
+            --soft: #fef3c7; --line: #fde68a; --rgb: 217, 119, 6;
+            margin: 8px 0 28px; overflow: hidden; border: 1px solid var(--line);
+            border-top: 4px solid var(--accent); border-radius: 18px;
+            background: #fff; color: #1e293b; box-shadow: 0 6px 24px #0f172a06; }
+        .stock-matrix--fg { --accent: #0f766e; --deep: #115e59; --tint: #f0fdfa;
+            --soft: #ccfbf1; --line: #99f6e4; --rgb: 13, 148, 136; }
+        .stock-matrix__header { display: flex; justify-content: space-between; gap: 24px;
+            align-items: center; padding: 24px; background: linear-gradient(110deg, var(--tint), #fff); }
+        .stock-matrix__badge { display: inline-block; padding: 5px 10px; border-radius: 6px;
+            background: var(--soft); color: var(--deep); font-size: 11px;
+            font-weight: 750; letter-spacing: .07em; }
+        .stock-matrix h3 { margin: 10px 0 5px; padding: 0; color: #0f172a;
+            font-size: 23px; font-weight: 750; line-height: 1.4; }
+        .stock-matrix__description { margin: 0; color: #64748b; font-size: 13px; line-height: 1.7; }
+        .stock-matrix__summary { flex-shrink: 0; text-align: right; }
+        .stock-matrix__label { color: #475569; font-size: 12px; }
+        .stock-matrix__quantity { color: var(--deep); font-size: 32px; font-weight: 800;
+            line-height: 1.45; font-variant-numeric: tabular-nums; }
+        .stock-matrix__quantity small { font-size: 14px; font-weight: 500; }
+        .stock-matrix__counts { color: #64748b; font-size: 12px; }
+        .stock-matrix__scroll { position: relative; overflow: auto; max-height: 480px;
+            border-top: 1px solid var(--line); scrollbar-color: var(--accent) var(--tint); }
+        .stock-matrix__scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+        .stock-matrix table { width: 100%; border-collapse: separate; border-spacing: 0;
+            margin: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+        .stock-matrix th, .stock-matrix td { padding: 14px 18px; border: 0;
+            border-right: 1px solid #f1f5f9; border-bottom: 1px solid #e2e8f0; }
+        .stock-matrix thead th { position: sticky; top: 0; z-index: 2;
+            min-width: 145px; max-width: 220px; background: var(--tint);
+            color: var(--deep); text-align: center; font-size: 12px;
+            font-weight: 700; overflow-wrap: anywhere; }
+        .stock-matrix th:first-child { position: sticky; left: 0; z-index: 1;
+            min-width: 125px; background: #fff; color: #475569;
+            text-align: left; white-space: nowrap; box-shadow: 3px 0 8px #0f172a05; }
+        .stock-matrix thead th:first-child { z-index: 3; background: var(--tint); color: var(--deep); }
+        .stock-matrix td { text-align: right; white-space: nowrap; color: #334155; }
+        .stock-matrix td.stock-matrix__value { color: var(--deep); font-weight: 600; }
+        .stock-matrix td.stock-matrix__zero { color: #64748b; }
+        .stock-matrix .stock-matrix__row-total { background: var(--tint);
+            color: var(--deep); font-weight: 750; }
+        .stock-matrix tbody tr:hover td, .stock-matrix tbody tr:hover th { box-shadow: inset 0 0 0 999px #0f172a06; }
+        .stock-matrix tfoot th, .stock-matrix tfoot td { border-bottom: 0;
+            border-top: 2px solid var(--line); background: var(--soft); color: var(--deep); font-weight: 750; }
+        .stock-matrix tfoot th:first-child { background: var(--soft); color: var(--deep); }
+        .stock-matrix tfoot td:last-child { background: var(--accent); color: #fff; }
+        .stock-matrix__footer { display: flex; justify-content: space-between; flex-wrap: wrap;
+            gap: 8px 20px; padding: 12px 20px; background: #f8fafc;
+            border-top: 1px solid #e2e8f0; color: #64748b; font-size: 11px; line-height: 1.7; }
+        .stock-matrix__legend { display: inline-flex; align-items: center; gap: 7px; }
+        .stock-matrix__swatch { width: 36px; height: 8px; border-radius: 4px;
+            background: linear-gradient(90deg, rgba(var(--rgb), .04), rgba(var(--rgb), .24)); }
+        .stock-matrix__empty { padding: 30px 24px; border-top: 1px solid var(--line);
+            color: #64748b; text-align: center; font-size: 14px; }
+        .stock-matrix__sr-only { position: absolute; width: 1px; height: 1px;
+            padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+        @media (max-width: 640px) {
+            .stock-matrix__header { align-items: flex-start; flex-direction: column; gap: 16px; padding: 18px; }
+            .stock-matrix__summary { text-align: left; }
+            .stock-matrix h3 { font-size: 21px; }
+            .stock-matrix__quantity { font-size: 28px; }
+            .stock-matrix th, .stock-matrix td { padding: 12px 14px; }
+            .stock-matrix th:first-child { min-width: 110px; }
+            .stock-matrix__footer { padding: 12px 16px; }
+        }
+        </style>""", unsafe_allow_html=True)
 
-        import math
+        def render_matrix_table(target_df, stock_type):
+            is_wip = stock_type == "WIP"
+            theme = "wip" if is_wip else "fg"
+            category_name = "WORK IN PROGRESS" if is_wip else "FINISHED GOODS"
+            description = "สต็อกงานระหว่างกระบวนการ" if is_wip else "สต็อกสินค้าสำเร็จรูป"
+            pivot_df = pd.DataFrame()
+            active_grades = 0
 
-        import math
+            if not target_df.empty:
+                matrix_data = target_df.copy()
+                matrix_data["Cultivar Name"] = matrix_data["Cultivar Name"].fillna("").astype(str).str.strip().replace("", "ไม่ระบุชื่อสายพันธุ์")
+                matrix_data["Grade"] = matrix_data["Grade"].fillna("").astype(str).str.strip().str.upper().replace("", "GENERAL")
+                pivot_df = matrix_data.pivot_table(
+                    index="Grade", columns="Cultivar Name", values="Clean_Qty",
+                    aggfunc="sum", fill_value=0.0,
+                )
+                active_grades = len(pivot_df.index)
+                standard_sizes = ["BIG", "SMALL", "MIX", "F"]
+                other_sizes = [grade for grade in pivot_df.index if grade not in standard_sizes]
+                pivot_df = pivot_df.reindex(standard_sizes + other_sizes, fill_value=0.0)
 
-        # 🎨 ฟังก์ชันสร้างตาราง Matrix ด้วย HTML Table (บังคับสีเขียวพาสเทลและขนาดตัวอักษรได้ 100%)
-        def render_matrix_table(target_df, section_title):
-            st.subheader(section_title)
-            if target_df.empty:
-                st.info("ไม่มีข้อมูลในหมวดหมู่นี้")
+            section_total = float(pivot_df.to_numpy().sum()) if not pivot_df.empty else 0.0
+            cultivar_count = len(pivot_df.columns)
+            html = [
+                f'<section class="stock-matrix stock-matrix--{theme}" aria-labelledby="matrix-{theme}-title">',
+                '<header class="stock-matrix__header"><div>',
+                f'<span class="stock-matrix__badge">{stock_type} · {category_name}</span>',
+                f'<h3 id="matrix-{theme}-title">{stock_type} Matrix Summary</h3>',
+                f'<p class="stock-matrix__description">{description} แยกตามสายพันธุ์และขนาด / เกรด</p></div>',
+                f'<div class="stock-matrix__summary"><div class="stock-matrix__label">ยอดคงเหลือ {stock_type}</div>',
+                f'<div class="stock-matrix__quantity">{section_total:,.2f} <small>g</small></div>',
+                f'<div class="stock-matrix__counts">{cultivar_count:,} สายพันธุ์ &nbsp;·&nbsp; {active_grades:,} เกรดที่มีสต็อก</div></div></header>',
+            ]
+            if pivot_df.empty:
+                html.append(f'<div class="stock-matrix__empty">ยังไม่มีสต็อก {stock_type} คงเหลือในขณะนี้</div></section>')
+                st.markdown("".join(html), unsafe_allow_html=True)
                 return
 
-            matrix_data = target_df.copy()
-            matrix_data["Cultivar Name"] = matrix_data["Cultivar Name"].fillna("ไม่ระบุชื่อสายพันธุ์").astype(str).str.strip()
-            matrix_data.loc[matrix_data["Cultivar Name"] == "", "Cultivar Name"] = "ไม่ระบุชื่อสายพันธุ์"
-            matrix_data["Grade"] = matrix_data["Grade"].fillna("GENERAL").astype(str).str.strip().str.upper()
+            html.extend([
+                f'<div class="stock-matrix__scroll" role="region" tabindex="0" aria-label="ตารางสต็อก {stock_type} เลื่อนเพื่อดูสายพันธุ์ทั้งหมด">',
+                f'<table><caption class="stock-matrix__sr-only">ปริมาณสต็อก {stock_type} แยกตามเกรดและสายพันธุ์ หน่วยกรัม</caption>',
+                '<thead><tr><th scope="col">Size / Grade</th>',
+            ])
+            for cultivar in pivot_df.columns:
+                html.append(f'<th scope="col">{escape(str(cultivar))}</th>')
+            html.append('<th scope="col" class="stock-matrix__row-total">รวมตามเกรด (g)</th></tr></thead><tbody>')
 
-            pivot_df = matrix_data.pivot_table(
-                index="Grade", 
-                columns="Cultivar Name", 
-                values="Clean_Qty", 
-                aggfunc="sum", 
-                fill_value=0.0
-            )
+            max_quantity = float(pivot_df.to_numpy().max())
+            for grade, quantities in pivot_df.iterrows():
+                html.append(f'<tr><th scope="row">{escape(str(grade))}</th>')
+                for quantity in quantities:
+                    if quantity > 0:
+                        intensity = 0.04 + 0.20 * float(quantity) / max_quantity
+                        html.append(f'<td class="stock-matrix__value" style="background: rgba(var(--rgb), {intensity:.3f})">{quantity:,.2f}</td>')
+                    else:
+                        html.append('<td class="stock-matrix__zero"><span aria-hidden="true">—</span><span class="stock-matrix__sr-only">0.00</span></td>')
+                html.append(f'<td class="stock-matrix__row-total">{quantities.sum():,.2f}</td></tr>')
 
-            standard_sizes = ["BIG", "SMALL", "MIX", "F"]
-            for size in standard_sizes:
-                if size not in pivot_df.index:
-                    pivot_df.loc[size] = 0.0
-            
-            existing_sizes = [s for s in standard_sizes if s in pivot_df.index]
-            other_sizes = [s for s in pivot_df.index if s not in standard_sizes]
-            pivot_df = pivot_df.loc[existing_sizes + other_sizes]
+            html.append('</tbody><tfoot><tr><th scope="row">รวมทั้งหมด</th>')
+            for quantity in pivot_df.sum(axis=0):
+                html.append(f'<td>{quantity:,.2f}</td>')
+            html.extend([
+                f'<td>{section_total:,.2f}</td></tr></tfoot></table></div>',
+                '<footer class="stock-matrix__footer">',
+                '<span class="stock-matrix__legend"><span class="stock-matrix__swatch" aria-hidden="true"></span>สีเข้ม = ปริมาณมาก เทียบภายในแต่ละตาราง</span>',
+                '<span>หน่วย: กรัม (g) &nbsp;·&nbsp; — = ไม่มีสต็อก &nbsp;·&nbsp; เลื่อนตารางเพื่อดูทุกสายพันธุ์</span>',
+                '</footer></section>',
+            ])
+            st.markdown("".join(html), unsafe_allow_html=True)
 
-            # เพิ่มแถว TOTAL ด้านล่างสุด
-            total_series = pivot_df.sum(axis=0)
-            pivot_df.loc["TOTAL (ยอดรวม)"] = total_series
-
-            all_cultivars = list(pivot_df.columns)
-            total_cultivars = len(all_cultivars)
-
-            # เงื่อนไข: ถ้าไม่ถึง 10 สายพันธุ์ ไม่แบ่งครึ่ง
-            if total_cultivars < 10:
-                cultivar_chunks = [all_cultivars]
-            else:
-                chunk_size = math.ceil(total_cultivars / 2)
-                cultivar_chunks = [all_cultivars[i:i + chunk_size] for i in range(0, total_cultivars, chunk_size)]
-
-            for chunk_idx, chunk_cols in enumerate(cultivar_chunks):
-                if len(cultivar_chunks) > 1:
-                    st.markdown(f"**📄 ส่วนที่ {chunk_idx + 1} (สายพันธุ์ที่ {chunk_idx*chunk_size + 1} ถึง {min((chunk_idx+1)*chunk_size, total_cultivars)})**")
-
-                sub_pivot = pivot_df[chunk_cols].copy()
-
-                # สร้างตาราง HTML เองเพื่อให้คุมสีและขนาดได้เป๊ะ 100%
-                html = """
-                <div style="overflow-x: auto; margin-bottom: 20px;">
-                <table style="width: 100%; border-collapse: collapse; background-color: #ffffff; font-family: sans-serif; font-size: 14px; border: 1px solid #cbd5e1;">
-                    <thead>
-                        <tr style="background-color: #dcfce7; color: #14532d;">
-                            <th style="padding: 12px; border: 1px solid #bbf7d0; text-align: center; font-weight: bold; font-size: 15px;">Size / Grade</th>
-                """
-                for col in sub_pivot.columns:
-                    html += f'<th style="padding: 12px; border: 1px solid #bbf7d0; text-align: center; font-weight: bold; font-size: 15px;">{col}</th>'
-                html += "</tr></thead><tbody>"
-
-                for idx, row_name in enumerate(sub_pivot.index):
-                    is_total = ("TOTAL" in str(row_name).upper())
-                    row_bg = "#f8fafc" if is_total else ("#ffffff" if idx % 2 == 0 else "#f9fafb")
-                    row_weight = "bold" if is_total else "normal"
-                    
-                    html += f'<tr style="background-color: {row_bg}; font-weight: {row_weight};">'
-                    # คอลัมน์แรก (แกน Y - Size)
-                    html += f'<td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; background-color: #bbf7d0; color: #14532d; font-weight: bold;">{row_name}</td>'
-                    
-                    for col in sub_pivot.columns:
-                        val = sub_pivot.loc[row_name, col]
-                        val_str = f"{val:,.2f}" if val > 0 else "-"
-                        html += f'<td style="padding: 10px; border: 1px solid #e2e8f0; text-align: center; color: #1e293b;">{val_str}</td>'
-                    html += "</tr>"
-
-                html += "</tbody></table></div>"
-                st.markdown(html, unsafe_allow_html=True)
-                st.markdown("<br>", unsafe_allow_html=True)        
-        
-        # 🧪 แสดงตาราง Matrix ของหมวด WIP
-        render_matrix_table(wip_stock_df, "🧪 ตารางสรุปยอด WIP แยกตามสายพันธุ์และขนาด (WIP Matrix Summary)")
-
-        st.divider()
-
-        # 📦 แสดงตาราง Matrix ของหมวด FG
-        render_matrix_table(fg_stock_df, "📦 ตารางสรุปยอด FG (Finished Goods) แยกตามสายพันธุ์และขนาด (FG Matrix Summary)")
+        render_matrix_table(wip_stock_df, "WIP")
+        render_matrix_table(fg_stock_df, "FG")
 
         st.divider()
 
