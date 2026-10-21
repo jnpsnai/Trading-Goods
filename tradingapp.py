@@ -100,16 +100,10 @@ def init_google_sheets(sheet_name):
         "Shipped_Out_Log", "1000", "12", 
         ["Timestamp", "Category", "Lot No.", "Cultivar / Product", "Grade", "Shipped Qty", "Consignee (ปลายทาง)", "Client (ลูกค้า)", "Shipping Reason", "Shipment Date", "Note"]
     )
+    # เพิ่ม Sheet สำหรับเก็บประวัติการปรับยอด Adjustment
     adjustment_log_sheet = get_or_create_worksheet(
         "Adjustment_Log", "1000", "8",
         ["Timestamp", "Source", "Lot No.", "Product Name", "Old Quantity", "New Quantity", "Reason", "Adjusted Date"]
-    )
-    
-    # ✨ เพิ่ม Sheet สำหรับ Picking Request Module (ใหม่)
-    picking_request_sheet = get_or_create_worksheet(
-        "Picking_Request_Log", "1000", "14",
-        ["Timestamp", "Source Category", "Source Lot", "Cultivar Name", "Target Grade", "Request Qty", 
-         "Consignee", "True Consignee", "Shipping Reason", "Expected Shipment Date", "Status", "Note", "Packed FG Lot", "Shipped Out Ref"]
     )
 
     EXPECTED_HEADERS = [
@@ -121,9 +115,9 @@ def init_google_sheets(sheet_name):
     if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
         main_sheet.update(range_name="A1:P1", values=[EXPECTED_HEADERS])
         
-    return client, sh, main_sheet, packing_records_sheet, packing_log_sheet, shipped_sheet, adjustment_log_sheet, picking_request_sheet
+    return client, sh, main_sheet, packing_records_sheet, packing_log_sheet, shipped_sheet, adjustment_log_sheet
 
-client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet, adjustment_sheet, picking_request_sheet = init_google_sheets(SHEET_NAME)
+client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet, adjustment_sheet = init_google_sheets(SHEET_NAME)
 
 # ==========================================
 # 4. ฟังก์ชันตัวช่วย (Helper Functions)
@@ -181,7 +175,7 @@ def format_df_quantity(df):
                 df_copy[col] = df_copy[col].apply(format_date)
 
             # 📦 2. จัดการลูกน้ำ (,) สำหรับคอลัมน์ตัวเลขและจำนวน
-            keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ", "available", "wip", "fg", "request qty"]
+            keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ", "available", "wip", "fg"]
             is_target_col = any(k in col_str for k in keywords)
             ignore_kws = ["year", "ปี", "lot", "id", "เลข", "no.", "รหัส"]
             is_ignore = any(ig in col_str for ig in ignore_kws)
@@ -366,170 +360,255 @@ def render_grade_summary(stock_df, total, stock_type):
 # ==========================================
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
-# ✨ เปลี่ยนหน้าแรกเป็น Delivery & Picking Request แบบใหม่
+# ✨ เพิ่ม 🔧 Adjustment Module
 menu = st.sidebar.radio(
     "เลือกเมนูการใช้งาน",
-    ["🚚 Delivery & Picking Request", "📊 Stock Summary & Details", "📈 Monthly Report", "📝 Trading Goods Registration", "✏️ Edit Registration", "🔧 Adjustment Module", "📦 Packing Module", "🚚 Shipped Out Module"],
+    ["🚨 Delivery Issue", "📊 Stock Summary & Details", "📈 Monthly Report", "📝 Trading Goods Registration", "✏️ Edit Registration", "🔧 Adjustment Module", "📦 Packing Module", "🚚 Shipped Out Module"],
 )
 st.sidebar.markdown("---")
 st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing (Pastel Theme)")
 
 
 # ==========================================
-# หน้าที่ 1: Delivery & Picking Request (ใหม่)
+# หน้าที่ 1: Delivery Issue
 # ==========================================
-if menu == "🚚 Delivery & Picking Request":
+if menu == "🚨 Delivery Issue":
     render_portal_ui_styles()
     with st.container(key="delivery_header"):
         col_head1, col_head2 = st.columns([4, 1])
         with col_head1:
-            st.title("🚚 Delivery & Picking Request")
-            st.caption("ระบบจัดการใบเบิกสินค้า (Picking Request) และติดตามกำหนดการจัดส่ง")
+            st.title("Delivery Issue")
+            st.caption("ติดตามกำหนดส่ง ความพร้อมของสินค้า และยอดจัดส่งในแต่ละวัน")
         with col_head2:
             with st.expander("🔗 เปิด Google Sheets"):
                 pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del")
                 if pwd == "tstd": st.markdown("[🟢 **เปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
 
-    tab_dash, tab_create, tab_legacy = st.tabs([
-        "📋 1. Active Delivery Dashboard", 
-        "📝 2. สร้าง Picking Request (ใหม่)", 
-        "🗄️ 3. Legacy Delivery Schedule (ข้อมูลเก่า)"
-    ])
+    if "delivery_reschedule_success" in st.session_state:
+        st.success(st.session_state.pop("delivery_reschedule_success"))
 
-    # ------------------------------------------
-    # Tab 1: Active Delivery Dashboard
-    # ------------------------------------------
-    with tab_dash:
-        render_section_heading("สถานะใบเบิกสินค้าและการจัดส่ง", "ติดตามใบเบิกสินค้าที่ยังค้างอยู่ (Active) แยกตามวันที่กำหนดส่ง", eyebrow="ACTIVE REQUESTS")
-        pr_data = get_cached_data("picking_request", picking_request_sheet, include_row_index=True)
-        if pr_data:
-            df_pr = pd.DataFrame(pr_data)
-            df_pr["Clean_Qty"] = df_pr["Request Qty"].apply(clean_quantity)
-            
-            # กรองเฉพาะรายการที่ยังไม่ส่งมอบสมบูรณ์
-            active_df = df_pr[~df_pr["Status"].astype(str).str.contains("Delivered|จัดส่งแล้ว", case=False, na=False)].copy()
-            
-            if not active_df.empty:
-                active_df["Parsed_Date"] = active_df["Expected Shipment Date"].apply(parse_delivery_date)
-                active_df = active_df.sort_values(by="Parsed_Date", na_position="last")
-                
-                with st.container(key="delivery_overview"):
-                    summary_cols = st.columns(4)
-                    with summary_cols[0]: st.metric("รายการค้างส่งทั้งหมด", f"{len(active_df):,}")
-                    with summary_cols[1]: st.metric("ปริมาณรอส่งรวม (g)", f"{active_df['Clean_Qty'].sum():,.2f}")
-                    with summary_cols[2]: st.metric("ใบงานพร้อมส่ง (FG)", len(active_df[active_df["Status"].str.contains("พร้อมส่ง")]))
-                    with summary_cols[3]: st.metric("ใบงานที่รอแพ็ก (WIP)", len(active_df[active_df["Status"].str.contains("รอแพ็ค")]))
+    try:
+        del_sheet = sh.worksheet("Delivery_schedule")
+        data_del = get_cached_data("delivery", del_sheet, include_row_index=True)
+        df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
+    except gspread.exceptions.WorksheetNotFound:
+        st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
+        df_del = pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
+        df_del = pd.DataFrame()
 
-                st.dataframe(
-                    format_df_quantity(active_df.drop(columns=["Original_Row_Index", "Parsed_Date", "Clean_Qty"], errors='ignore')),
-                    use_container_width=True, hide_index=True
-                )
-            else:
-                st.info("✅ ไม่มีรายการจัดส่งที่ค้างอยู่ (Active) ในขณะนี้")
-        else:
-            st.info("ยังไม่มีข้อมูล Picking Request ในระบบ")
+    if not df_del.empty:
+        df_del.columns = [str(c).strip() for c in df_del.columns]
 
-    # ------------------------------------------
-    # Tab 2: สร้าง Picking Request
-    # ------------------------------------------
-    with tab_create:
-        render_section_heading("สร้างใบเบิกสินค้า (Create Picking Request)", "ดึงรายการสต็อกคงเหลือ (WIP/FG) มาระบุเป้าหมายการแพ็ก/จัดส่ง โดยสต็อกจริงจะยังไม่ถูกหักจนกว่าจะทำ Packing หรือ Shipped Out", eyebrow="NEW REQUEST")
-        
-        data_main = get_cached_data("main", sheet)
-        df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
-        records_data = get_cached_data("packing", packing_records_sheet)
-        df_packing_fg = pd.DataFrame(records_data) if records_data else pd.DataFrame()
+        vol_col = next((c for c in df_del.columns if "volume" in str(c).lower()), None)
+        fg_col = next((c for c in df_del.columns if "available fg" in str(c).lower()), None)
+        wip_col = next((c for c in df_del.columns if "available wip" in str(c).lower()), None)
 
-        avail_options = []
-        avail_map = {}
+        if vol_col and fg_col:
+            def check_readiness(row):
+                vol = clean_quantity(row.get(vol_col, 0))
+                onhand = clean_quantity(row.get(fg_col, 0))
+                wip_val = str(row.get(wip_col, "")).replace(",", "") if wip_col else "0"
+                wip_numbers = re.findall(r"[-+]?\d*\.\d+|\d+", wip_val)
+                total_wip = sum([float(n) for n in wip_numbers]) if wip_numbers else 0.0
 
-        if not df_main.empty:
-            df_main["Clean_Qty"] = df_main["Quantity"].apply(clean_quantity) if "Quantity" in df_main.columns else 0.0
-            main_avail = df_main[(df_main["Clean_Qty"] > 0) & (~df_main["Status"].astype(str).str.strip().str.lower().eq("delivered"))]
-            for _, r in main_avail.iterrows():
-                cat = str(r.get("Category", ""))
-                lot_no = str(r.get("THAI STICK Lot. No.", "")).strip() or str(r.get("Supplier Lot. No.", "")).strip() or "No-Lot"
-                prod = str(r.get("Cultivar Name", ""))
-                disp = f"[{cat}] Lot: {lot_no} | {prod} | Qty: {r['Clean_Qty']:,.2f}g"
-                avail_options.append(disp)
-                avail_map[disp] = {"lot": lot_no, "cat": cat, "prod": prod}
+                if vol > 0 and onhand >= vol: return "✅ พร้อมส่ง"
+                elif vol > 0 and total_wip > 0: return "📦 รอแพ็ค"
+                elif vol > 0: return "📥 รอรับเข้าสินค้า"
+                else: return "➖ N/A"
+            df_del["Status (ความพร้อม)"] = df_del.apply(check_readiness, axis=1)
 
-        if not df_packing_fg.empty:
-            df_packing_fg["Clean_Qty"] = df_packing_fg["Quantity"].apply(clean_quantity) if "Quantity" in df_packing_fg.columns else 0.0
-            fg_avail = df_packing_fg[df_packing_fg["Clean_Qty"] > 0]
-            for _, r in fg_avail.iterrows():
-                lot_no = str(r.get("Generated FG Lot No.", "")).strip() or str(r.get("THAI STICK Lot. No.", "")).strip()
-                prod = str(r.get("Export Name", ""))
-                disp = f"[FG Packed] Lot: {lot_no} | {prod} | Qty: {r['Clean_Qty']:,.2f}g"
-                avail_options.append(disp)
-                avail_map[disp] = {"lot": lot_no, "cat": "FG", "prod": prod}
+        date_col = next((c for c in ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date"] if c in df_del.columns), None)
 
-        selected_sources = st.multiselect("🔍 1. เลือก WIP / FG ต้นทาง (เลือกได้หลายรายการ)", avail_options)
-        
-        if selected_sources:
-            with st.form("create_picking_request_form"):
-                st.markdown("##### 2. ระบุรายละเอียดของแต่ละรายการที่เลือก")
-                request_items = []
-                for disp in selected_sources:
-                    info = avail_map[disp]
-                    st.markdown(f"**📍 {disp}**")
-                    c1, c2 = st.columns(2)
-                    with c1: t_grade = st.selectbox(f"เกรดที่ต้องการ (Target Grade)", ["Big", "Small", "Mix", "F", "Grade A", "Premium", "ระบุเอง"], key=f"tg_{disp}")
-                    with c2: req_qty = st.number_input(f"จำนวนที่ต้องการเบิก (Request Qty)", min_value=0.0, step=0.1, key=f"rq_{disp}")
-                    if t_grade == "ระบุเอง": t_grade = st.text_input("ระบุเกรด:", key=f"tg_man_{disp}")
-                    request_items.append({"source_lot": info["lot"], "cat": info["cat"], "prod": info["prod"], "t_grade": t_grade, "req_qty": req_qty})
-                
-                st.divider()
-                st.markdown("##### 3. ข้อมูลการจัดส่ง")
-                co1, co2 = st.columns(2)
-                with co1: 
-                    consignee = st.text_input("ชื่อปลายทาง (Consignee) *")
-                    shipping_reason = st.selectbox("เหตุผลในการส่ง", ["EXPORT", "DOMESTIC SALE", "SAMPLE", "RETURN", "REJECT"])
-                with co2: 
-                    true_consignee = st.text_input("ลูกค้าตัวจริง (True Consignee / Client) *")
-                    exp_date = st.date_input("กำหนดการจัดส่ง (Expected Shipment Date)", value=date.today())
-                
-                note = st.text_area("หมายเหตุเพิ่มเติม (Note)")
-                
-                if st.form_submit_button("💾 สร้างใบ Picking Request"):
-                    if not consignee.strip() or not true_consignee.strip():
-                        st.error("❌ กรุณาระบุ Consignee และ True Consignee ให้ครบถ้วน")
-                    else:
-                        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        rows_to_insert = []
-                        for item in request_items:
-                            if item["req_qty"] <= 0: continue
-                            status = "📦 รอแพ็ค (Pending Pack)" if "WIP" in item["cat"].upper() else "✅ พร้อมส่ง (Ready to Ship)"
-                            rows_to_insert.append([
-                                timestamp, item["cat"], item["source_lot"], item["prod"], item["t_grade"], item["req_qty"],
-                                consignee, true_consignee, shipping_reason, str(exp_date), status, note, "", ""
-                            ])
-                        
-                        if rows_to_insert:
-                            picking_request_sheet.append_rows(rows_to_insert, value_input_option='USER_ENTERED')
-                            get_cached_data.clear()
-                            st.success(f"✅ สร้าง Picking Request สำเร็จ {len(rows_to_insert)} รายการ!")
-                            time.sleep(1.5)
-                            st.rerun()
+        delivery_internal_columns = ["Original_Row_Index", "Is_Unscheduled", "Parsed_Delivery_Date"]
+        if date_col:
+            df_del[date_col] = df_del[date_col].astype(str).str.strip()
+            df_del["Is_Unscheduled"] = df_del[date_col].str.casefold().isin(DELIVERY_PENDING_VALUES)
+            df_del["Parsed_Delivery_Date"] = df_del[date_col].map(parse_delivery_date)
+            df_del = df_del.sort_values(
+                by=["Is_Unscheduled", "Parsed_Delivery_Date"],
+                ascending=True, kind="stable", na_position="last",
+            )
+
+        scheduled_rows = df_del[df_del["Parsed_Delivery_Date"].notna()] if date_col else df_del.iloc[0:0]
+        with st.container(key="delivery_overview"):
+            render_section_heading(
+                "แผนจัดส่งสินค้า", "ดูยอดส่งและความพร้อมของรายการที่มีวันจัดส่ง พร้อมติดตามรายการรอยืนยัน",
+                eyebrow="DELIVERY PLANNING", tone="blue",
+            )
+            summary_cols = st.columns(4)
+            with summary_cols[0]:
+                st.metric("วันจัดส่งที่กำหนดแล้ว", f"{scheduled_rows['Parsed_Delivery_Date'].nunique():,}" if date_col else "—", help="จำนวนวันส่งที่มีวันที่ถูกต้อง รวมวันที่ผ่านมาแล้ว")
+            with summary_cols[1]:
+                st.metric("ยอดส่งตามกำหนด (Volume)", f"{scheduled_rows[vol_col].apply(clean_quantity).sum():,.2f}" if date_col and vol_col else "—", help="ยอดรวม Volume ของรายการที่มีวันจัดส่ง ไม่รวม TBC")
+            with summary_cols[2]:
+                ready_count = int(scheduled_rows["Status (ความพร้อม)"].eq("✅ พร้อมส่ง").sum()) if "Status (ความพร้อม)" in scheduled_rows else None
+                st.metric("พร้อมส่งตามกำหนด · รายการ", f"{ready_count:,}" if date_col and ready_count is not None else "—")
+            with summary_cols[3]:
+                st.metric("รอยืนยันวันส่ง (TBC) · รายการ", f"{int(df_del['Is_Unscheduled'].sum()):,}" if date_col else "—")
+
+        def display_delivery_table(frame):
+            display_frame = format_df_quantity(frame)
+            if "Status (ความพร้อม)" in display_frame.columns:
+                status_styles = {
+                    "✅ พร้อมส่ง": "background-color: #ecfdf5; color: #047857; font-weight: 600",
+                    "📦 รอแพ็ค": "background-color: #fffbeb; color: #92400e; font-weight: 600",
+                    "📥 รอรับเข้าสินค้า": "background-color: #eff6ff; color: #1d4ed8; font-weight: 600",
+                    "➖ N/A": "background-color: #f1f5f9; color: #475569",
+                }
+                display_frame = display_frame.style.map(lambda value: status_styles.get(str(value), ""), subset=["Status (ความพร้อม)"])
+            st.dataframe(
+                display_frame, width="stretch", hide_index=True,
+                column_config={
+                    "Cultivar Name": st.column_config.TextColumn("สายพันธุ์ / สินค้า", width="medium"),
+                    "Grade": st.column_config.TextColumn("เกรด", width="small"),
+                    "Status (ความพร้อม)": st.column_config.TextColumn("ความพร้อม", width="medium"),
+                },
+            )
+
+        with st.container(key="delivery_reschedule"):
+            with st.expander("✏️ เลื่อน/ปรับเปลี่ยนกำหนดการจัดส่ง (Reschedule)"):
+                with st.form("reschedule_form"):
+                    st.caption("เลือกได้หลายรายการ จากนั้นระบุวันส่งใหม่ หรือเลือก TBC หากยังไม่มีกำหนด")
+                    reschedule_opts = []
+                    reschedule_map = {}
+                    for _, r in df_del.iterrows():
+                        row_idx = r["Original_Row_Index"]
+                        curr_dt = str(r.get(date_col, "")) if date_col else ""
+                        vol = r.get(vol_col if vol_col else "Volume", 0)
+
+                        item_name = "Unknown Item"
+                        for nk in ["Cultivar Name", "Cultivar name", "Cultivar", "Export Name", "Product", "ชื่อ"]:
+                            if nk in df_del.columns and str(r.get(nk, "")).strip() and str(r.get(nk, "")).strip().lower() != 'nan':
+                                item_name = str(r.get(nk, "")).strip(); break
+
+                        item_grade = "-"
+                        for gk in ["Grade", "grade", "Size", "size"]:
+                            if gk in df_del.columns and str(r.get(gk, "")).strip() and str(r.get(gk, "")).strip().lower() != 'nan':
+                                item_grade = str(r.get(gk, "")).strip(); break
+
+                        try: vol_disp = f"{float(vol):,.2f}" if float(vol) % 1 != 0 else f"{int(vol):,}"
+                        except: vol_disp = str(vol)
+
+                        disp_txt = f"บรรทัด {row_idx} | {item_name} (Grade: {item_grade}) | วันเดิม: {curr_dt} | Volume: {vol_disp}"
+                        reschedule_opts.append(disp_txt)
+                        reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt}
+
+                    selected_items = st.multiselect(
+                        "เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts,
+                        key="delivery_reschedule_items",
+                    )
+                    mark_tbc = st.checkbox(
+                        "TBC — ยกเลิกวันส่งเดิม / รอยืนยันกำหนดใหม่",
+                        key="delivery_reschedule_tbc",
+                        help="เลือกเมื่อยกเลิกวันส่งเดิมและยังไม่มีวันใหม่ ระบบจะบันทึก TBC แทนวันที่ที่เลือกด้านล่าง โดยเก็บรายการสินค้าไว้",
+                    )
+                    new_date = st.date_input(
+                        "กำหนดการใหม่ (New Expected Date)", value=date.today(),
+                        key="delivery_reschedule_date",
+                        help="ใช้วันที่นี้เมื่อไม่ได้เลือก TBC",
+                    )
+
+                    if st.form_submit_button("💾 บันทึกกำหนดการใหม่"):
+                        if not selected_items:
+                            st.error("❌ กรุณาเลือกรายการอย่างน้อย 1 รายการ")
+                        elif not date_col:
+                            st.error("❌ ไม่พบคอลัมน์วันที่จัดส่ง จึงยังบันทึกกำหนดการใหม่ไม่ได้")
+                        elif not mark_tbc and new_date is None:
+                            st.error("❌ กรุณาระบุวันจัดส่งใหม่ หรือเลือก TBC หากยังไม่มีกำหนด")
                         else:
-                            st.warning("⚠️ กรุณาระบุจำนวนที่ต้องการเบิก (Request Qty) ให้มากกว่า 0")
+                            try:
+                                headers = [str(header).strip() for header in del_sheet.row_values(1)]
+                                if date_col not in headers:
+                                    st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
+                                else:
+                                    col_idx = headers.index(date_col) + 1
+                                    new_value = "TBC" if mark_tbc else new_date.isoformat()
+                                    cells_to_update = []
+                                    success_rows = []
+                                    for selected in selected_items:
+                                        target_row = int(reschedule_map[selected]["row_idx"])
+                                        cells_to_update.append(gspread.Cell(row=target_row, col=col_idx, value=new_value))
+                                        success_rows.append(str(target_row))
+                                    del_sheet.update_cells(cells_to_update)
+                            except Exception as error:
+                                st.error(f"❌ บันทึกกำหนดการไม่สำเร็จ กรุณาลองใหม่: {error}")
+                            else:
+                                if date_col in headers:
+                                    get_cached_data.clear()
+                                    schedule_label = "TBC (รอยืนยันวันจัดส่งใหม่)" if mark_tbc else new_date.strftime("%d/%m/%Y")
+                                    st.session_state["delivery_reschedule_success"] = (
+                                        f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว"
+                                    )
+                                    st.rerun()
 
-    # ------------------------------------------
-    # Tab 3: Legacy Delivery Schedule
-    # ------------------------------------------
-    with tab_legacy:
-        render_section_heading("ข้อมูล Delivery Schedule เดิม", "สำหรับอ้างอิงข้อมูลเก่าจากแท็บ Delivery_schedule", eyebrow="LEGACY DATA", tone="slate")
-        try:
-            del_sheet = sh.worksheet("Delivery_schedule")
-            data_del = get_cached_data("delivery", del_sheet, include_row_index=True)
-            df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
-            if not df_del.empty: st.dataframe(format_df_quantity(df_del.drop(columns=["Original_Row_Index"], errors='ignore')), use_container_width=True, hide_index=True)
-            else: st.info("ไม่มีข้อมูลในชีตนี้")
-        except: st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule'")
+        render_section_heading(
+            "กำหนดการจัดส่ง", "เรียงวันส่งจากก่อนถึงหลัง พร้อมยอดรวมส่งของแต่ละวัน",
+            eyebrow="DELIVERY SCHEDULE", tone="blue",
+        )
+        with st.container(key="delivery_list"):
+            if date_col:
+                dated_df = df_del[df_del["Parsed_Delivery_Date"].notna()]
+                invalid_df = df_del[~df_del["Is_Unscheduled"] & df_del["Parsed_Delivery_Date"].isna()]
+                tbc_df = df_del[df_del["Is_Unscheduled"]]
+
+                for parsed_d, sub_df in dated_df.groupby("Parsed_Delivery_Date", sort=True):
+                    sub_display = sub_df.drop(columns=delivery_internal_columns, errors="ignore")
+                    d_date = parsed_d.strftime("%d/%m/%Y")
+                    thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+                    thai_day_str = thai_days[parsed_d.weekday()]
+                    diff_days = (parsed_d.date() - date.today()).days
+                    if diff_days < 0:
+                        day_tone, diff_text = "overdue", f"เลยกำหนด {abs(diff_days)} วัน"
+                    elif diff_days == 0:
+                        day_tone, diff_text = "today", "จัดส่งวันนี้"
+                    elif diff_days <= 3:
+                        day_tone, diff_text = "soon", f"อีก {diff_days} วัน"
+                    else:
+                        day_tone, diff_text = "scheduled", f"อีก {diff_days} วัน"
+                    daily_volume_display = (
+                        f"{sub_df[vol_col].apply(clean_quantity).sum():,.2f}"
+                        if vol_col else "ไม่พบคอลัมน์ Volume"
+                    )
+                    with st.container(border=True):
+                        st.markdown(
+                            f'<div class="delivery-day-header portal-day portal-day--{day_tone}">'
+                            '<div class="portal-day__main"><div class="portal-day__eyebrow">กำหนดส่ง</div>'
+                            f'<div class="portal-day__title">กำหนดส่ง: วัน{thai_day_str}ที่ {d_date}</div>'
+                            f'<div class="portal-day__meta"><span class="portal-day__badge">{diff_text}</span><span>{len(sub_df):,} รายการ</span></div></div>'
+                            '<div class="delivery-day-volume portal-day-volume">'
+                            '<div class="portal-day-volume__label">ยอดรวมส่ง (Volume)</div>'
+                            f'<div class="portal-day-volume__value">{daily_volume_display}</div>'
+                            '</div></div>', unsafe_allow_html=True,
+                        )
+                        display_delivery_table(sub_display)
+
+                if not invalid_df.empty:
+                    with st.container(border=True):
+                        st.warning("⚠️ รายการต่อไปนี้มีรูปแบบวันที่ไม่ถูกต้อง กรุณาระบุวันจัดส่งใหม่หรือเลือก TBC")
+                        display_delivery_table(invalid_df.drop(columns=delivery_internal_columns, errors="ignore"))
+
+                if not tbc_df.empty:
+                    with st.container(key="delivery_pending", border=True):
+                        st.markdown(
+                            '<div class="portal-day portal-day--pending"><div class="portal-day__main">'
+                            '<div class="portal-day__eyebrow">PENDING CONFIRMATION</div>'
+                            '<div class="portal-day__title">TBC · รอยืนยันวันจัดส่งใหม่</div>'
+                            f'<div class="portal-day__meta"><span class="portal-day__badge">ยังไม่มีกำหนดส่ง</span><span>{len(tbc_df):,} รายการ</span></div></div></div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.caption("กำหนดวันใหม่ได้ในส่วนปรับเปลี่ยนกำหนดการด้านบน รายการจะกลับไปเรียงตามวันส่งโดยอัตโนมัติ")
+                        display_delivery_table(tbc_df.drop(columns=delivery_internal_columns, errors="ignore"))
+            else:
+                st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้")
+                display_delivery_table(df_del.drop(columns=delivery_internal_columns, errors="ignore"))
+    else:
+        st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule'")
 
 
 # ==========================================
-# หน้าที่ 2: Stock Summary & Details (โค้ดดั้งเดิมของคุณทั้งหมด)
+# หน้าที่ 2: Stock Summary & Details
 # ==========================================
 elif menu == "📊 Stock Summary & Details":
     render_portal_ui_styles()
@@ -783,7 +862,7 @@ elif menu == "📊 Stock Summary & Details":
         st.markdown('<div class="portal-empty">ยังไม่มีข้อมูลสต็อกในระบบ เมื่อบันทึกรับสินค้าแล้ว ยอดคงเหลือจะแสดงที่หน้านี้</div>', unsafe_allow_html=True)
 
 # ==========================================
-# หน้าที่ 3: Monthly Report (โค้ดดั้งเดิมของคุณ)
+# หน้าที่ 3: Monthly Report
 # ==========================================
 elif menu == "📈 Monthly Report":
     st.title("📈 Monthly Report (รายงานสรุปผลการดำเนินงานรายเดือน)")
@@ -960,7 +1039,7 @@ elif menu == "📈 Monthly Report":
             st.info(f"ℹ️ ไม่พบประวัติการส่งออกในเดือน {selected_month_label} {selected_year}")
 
 # ==========================================
-# หน้าที่ 4: Trading Goods Registration (โค้ดดั้งเดิมของคุณ)
+# หน้าที่ 4: Trading Goods Registration
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
     col_head1, col_head2 = st.columns([7, 3])
@@ -1044,7 +1123,7 @@ elif menu == "📝 Trading Goods Registration":
             st.rerun()
 
 # ==========================================
-# หน้าที่ 5: Edit Registration (โค้ดดั้งเดิมของคุณ)
+# หน้าที่ 5: Edit Registration
 # ==========================================
 elif menu == "✏️ Edit Registration":
     st.title("✏️ Edit Registration Data")
@@ -1178,14 +1257,17 @@ elif menu == "✏️ Edit Registration":
         st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
 
 # ==========================================
-# หน้าที่ 5.5: 🔧 Adjustment Module (โค้ดดั้งเดิมของคุณ)
+# หน้าที่ 5.5: 🔧 Adjustment Module (ใหม่)
 # ==========================================
 elif menu == "🔧 Adjustment Module":
     st.title("🔧 Adjustment Module (WIP & FG)")
     st.markdown("ใช้สำหรับปรับแก้ตัวเลขยอด WIP และ FG ในกรณีที่ลงข้อมูลผิดพลาดหรือยอดไม่ตรงกับหน้างานจริง")
 
+    # ดึงข้อมูลจากชีตหลัก
     data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
+    
+    # ดึงข้อมูลจากชีตที่แพ็กแล้ว
     records_data = get_cached_data("packing", packing_records_sheet)
     df_packing_fg = pd.DataFrame(records_data) if records_data else pd.DataFrame()
 
@@ -1254,6 +1336,7 @@ elif menu == "🔧 Adjustment Module":
                         qty_idx = headers.index("Quantity") + 1 if "Quantity" in headers else 8
                         packing_records_sheet.update_cell(info["row_idx"], qty_idx, new_qty)
 
+                    # บันทึกลง Log
                     log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     adjustment_sheet.append_row([
                         log_time, info["source"], info["lot_no"], info["product"], 
@@ -1268,7 +1351,7 @@ elif menu == "🔧 Adjustment Module":
                     st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
-# หน้าที่ 6: Packing Module (โครงสร้างเดิม 100% + Auto-Update Status)
+# หน้าที่ 6: Packing Module
 # ==========================================
 elif menu == "📦 Packing Module":
     st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
@@ -1390,6 +1473,7 @@ elif menu == "📦 Packing Module":
                                 st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
                             else:
                                 with st.spinner("⏳ กำลังบันทึกข้อมูล..."):
+                                    # ✨ แก้ไขปัญหาอัปเดตลงผิดคอลัมน์ โดยดึง Header จริงจาก Sheet ปัจจุบันมาใช้
                                     sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
                                     col_end_letter = chr(64 + len(sheet_headers)).upper()
                                     
@@ -1407,6 +1491,7 @@ elif menu == "📦 Packing Module":
                                             if supplier not in combined_suppliers:
                                                 combined_suppliers.append(supplier)
                                             
+                                            # ✨ ดึงค่า row เดิมจาก Sheet มาเตรียมอัปเดต
                                             current_row_values = sheet.row_values(row_idx)
                                             while len(current_row_values) < len(sheet_headers):
                                                 current_row_values.append("")
@@ -1449,16 +1534,6 @@ elif menu == "📦 Packing Module":
                                                 g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
                                             ]
                                             packing_records_sheet.append_row(rec_row, value_input_option='USER_ENTERED')
-                                            
-                                    # ✨ ระบบ Auto-Update สถานะ Picking Request (เชื่อมกับ Packing)
-                                    pr_data = get_cached_data("picking_request", picking_request_sheet, include_row_index=True)
-                                    if pr_data:
-                                        pr_headers = [str(h).strip() for h in picking_request_sheet.row_values(1)]
-                                        status_col_idx = pr_headers.index("Status") + 1 if "Status" in pr_headers else 11
-                                        for pr_row in pr_data:
-                                            # ถ้า Source Lot ตรงกับที่เบิกมาแพ็ก และสถานะยังรอแพ็กอยู่
-                                            if pr_row.get("Source Lot", "") in combined_source_lots and "รอแพ็ค" in str(pr_row.get("Status", "")):
-                                                picking_request_sheet.update_cell(pr_row["Original_Row_Index"], status_col_idx, "✅ พร้อมส่ง (Ready to Ship)")
 
                                     get_cached_data.clear()
                                     st.success(f"✅ บันทึกสำเร็จ! นำ WIP จำนวน {total_withdraw:,.2f} g ไปแพ็ก และสร้าง Lot FG ใหม่ {created_count} รายการ 🎉")
@@ -1471,7 +1546,7 @@ elif menu == "📦 Packing Module":
     if records_data: st.dataframe(format_df_quantity(pd.DataFrame(records_data)), use_container_width=True)
 
 # ==========================================
-# หน้าที่ 7: Shipped Out Module (โครงสร้างเดิม 100% + Auto-Update Status)
+# หน้าที่ 7: Shipped Out Module
 # ==========================================
 elif menu == "🚚 Shipped Out Module":
     st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
@@ -1618,17 +1693,6 @@ elif menu == "🚚 Shipped Out Module":
                         consignee, client_name, shipping_reason, shipment_date_str, note_ship
                     ], value_input_option='USER_ENTERED')
                     success_count += 1
-                    
-                # ✨ ระบบ Auto-Update สถานะ Picking Request (เชื่อมกับการส่งออก)
-                pr_data = get_cached_data("picking_request", picking_request_sheet, include_row_index=True)
-                if pr_data:
-                    pr_headers = [str(h).strip() for h in picking_request_sheet.row_values(1)]
-                    status_col_idx = pr_headers.index("Status") + 1 if "Status" in pr_headers else 11
-                    for pr_row in pr_data:
-                        # อิงจากรายการที่เพิ่งตัดสต็อกไป และชื่อ Consignee ตรงกัน
-                        for shipped_item in shipment_items:
-                            if pr_row.get("Source Lot", "") == shipped_item["lot_no"] and pr_row.get("Consignee", "") == consignee:
-                                picking_request_sheet.update_cell(pr_row["Original_Row_Index"], status_col_idx, "📦 Delivered (จัดส่งแล้ว)")
 
                 get_cached_data.clear()
                 st.success(f"✅ บันทึกการส่งออกสำเร็จทั้งหมด {success_count} รายการและตัดสต็อกต้นทางเรียบร้อยแล้ว! 🎉")
