@@ -6,6 +6,8 @@ import pandas as pd
 import streamlit as st
 import re
 from html import escape
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 # ==========================================
 # 1. ตั้งค่าหน้าเว็บ Streamlit (Wide Mode & CSS)
@@ -88,6 +90,7 @@ def init_google_sheets(sheet_name):
             ws.append_row(headers, table_range="A1")
         return ws
 
+    # แทรก Supplier Name เข้าไปเป็นตำแหน่งที่ 3 (Index 2)
     packing_records_sheet = get_or_create_worksheet(
         "Packing_Records", "1000", "15", 
         ["Timestamp", "Source WIP Lot", "Supplier Name", "Cultivar Name", "Export Name", "Generated FG Lot No.", "Grade", "Quantity", "Waste Qty", "Packing Date", "Note"]
@@ -100,11 +103,6 @@ def init_google_sheets(sheet_name):
         "Shipped_Out_Log", "1000", "12", 
         ["Timestamp", "Category", "Lot No.", "Cultivar / Product", "Grade", "Shipped Qty", "Consignee (ปลายทาง)", "Client (ลูกค้า)", "Shipping Reason", "Shipment Date", "Note"]
     )
-    # เพิ่ม Sheet สำหรับเก็บประวัติการปรับยอด Adjustment
-    adjustment_log_sheet = get_or_create_worksheet(
-        "Adjustment_Log", "1000", "8",
-        ["Timestamp", "Source", "Lot No.", "Product Name", "Old Quantity", "New Quantity", "Reason", "Adjusted Date"]
-    )
 
     EXPECTED_HEADERS = [
         "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
@@ -115,9 +113,9 @@ def init_google_sheets(sheet_name):
     if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
         main_sheet.update(range_name="A1:P1", values=[EXPECTED_HEADERS])
         
-    return client, sh, main_sheet, packing_records_sheet, packing_log_sheet, shipped_sheet, adjustment_log_sheet
+    return client, sh, main_sheet, packing_records_sheet, packing_log_sheet, shipped_sheet
 
-client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet, adjustment_sheet = init_google_sheets(SHEET_NAME)
+client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet = init_google_sheets(SHEET_NAME)
 
 # ==========================================
 # 4. ฟังก์ชันตัวช่วย (Helper Functions)
@@ -127,6 +125,7 @@ def clean_quantity(val):
     except: return 0.0
 
 DELIVERY_PENDING_VALUES = {"tbc", "to be confirmed", "tbd", "to be decided", "", "nan", "nat", "none"}
+
 
 def parse_delivery_date(value):
     text = str(value).strip()
@@ -138,33 +137,43 @@ def parse_delivery_date(value):
         parsed = pd.to_datetime(text, dayfirst=True, errors="coerce")
     return pd.Timestamp(parsed.date()) if pd.notna(parsed) else pd.NaT
 
+
 def format_df_quantity(df):
     if df is not None and not df.empty:
         df_copy = df.copy()
         for col in df_copy.columns:
             col_str = str(col).lower()
             
-            # ✨ 1. จัดการ Format วันที่แบบขั้นสูง
+            # ✨ 1. จัดการ Format วันที่แบบขั้นสูง (ดักจับและแก้ปัญหาวัน/เดือนสลับกัน)
             date_keywords = ["date", "วันที่", "timestamp"]
             if any(k in col_str for k in date_keywords):
                 def format_date(x):
                     if pd.isna(x) or str(x).strip().casefold() in DELIVERY_PENDING_VALUES:
                         return x
                     try:
-                        d_str = str(x).strip().split(" ")[0]
+                        d_str = str(x).strip().split(" ")[0] # ตัดเวลาทิ้งก่อนเอามาวิเคราะห์
+                        
                         import re
+                        # กรณี 1: ขึ้นต้นด้วยปี (เช่น 2026-10-24 หรือ 2026/10/24)
                         if re.match(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}$', d_str):
                             dt = pd.to_datetime(d_str)
+                        
+                        # กรณี 2: ขึ้นต้นด้วยวันหรือเดือน (เช่น 24/10/2026 หรือ 10/24/2026)
                         elif re.match(r'^\d{1,2}[-/]\d{1,2}[-/]\d{4}$', d_str):
                             parts = re.split(r'[-/]', d_str)
                             p1, p2, p3 = int(parts[0]), int(parts[1]), int(parts[2])
+                            
                             if p1 > 12: 
+                                # ตัวเลขแรกเกิน 12 แปลว่าวันขึ้นก่อนแน่นอน (DD/MM/YYYY)
                                 dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
                             elif p2 > 12: 
+                                # ตัวเลขที่สองเกิน 12 แปลว่าเดือนขึ้นก่อนแน่นอน (MM/DD/YYYY)
                                 dt = pd.to_datetime(f"{p3}-{p1:02d}-{p2:02d}")
                             else:
+                                # ถ้าคลุมเครือ (เช่น 05/06/2026) ให้ยึด DD/MM/YYYY เป็นมาตรฐานไทย
                                 dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
                         else:
+                            # กรณีอื่นๆ ที่รูปแบบแปลกไป ให้ Pandas ลองเดา
                             dt = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
                         
                         if pd.notna(dt):
@@ -199,15 +208,363 @@ def format_df_quantity(df):
         return df_copy
     return df
 
+import math
+
+PICKING_HEADERS = [
+    "Request ID", "Line ID", "Created At", "Cultivar Name", "Export Name",
+    "Source Categories", "Grade", "Volume", "Consignee", "True Consignee",
+    "Expected Shipping Date", "Required Category", "Note",
+]
+
+
+def picking_text(value):
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.casefold() in {"nan", "nat", "none", "<na>"} else text
+
+
+def picking_key(value):
+    return " ".join(picking_text(value).split()).casefold()
+
+
+def picking_quantity(value):
+    try:
+        number = float(picking_text(value).replace(",", ""))
+    except (ValueError, TypeError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def build_picking_catalog(main_records, packing_records):
+    catalog = {}
+
+    def add(record, category, packed=False):
+        quantity = picking_quantity(record.get("Quantity", ""))
+        if quantity is None or quantity <= 0:
+            return
+        if picking_key(record.get("Status")) == "delivered":
+            return
+        cultivar = picking_text(record.get("Cultivar Name"))
+        export_name = picking_text(record.get("Export Name"))
+        if not cultivar:
+            if not packed:
+                return
+            cultivar = export_name
+        if not cultivar:
+            return
+        item = catalog.setdefault(picking_key(cultivar), {
+            "cultivar": cultivar, "export_names": [], "sources": [],
+            "wip_qty": 0.0, "fg_by_grade": {},
+        })
+        if export_name and export_name not in item["export_names"]:
+            item["export_names"].append(export_name)
+        if category not in item["sources"]:
+            item["sources"].append(category)
+        grade = picking_text(record.get("Grade")).upper() or "GENERAL"
+        if category == "FG":
+            item["fg_by_grade"][grade] = item["fg_by_grade"].get(grade, 0.0) + quantity
+        else:
+            item["wip_qty"] += quantity
+
+    for record in main_records:
+        category = picking_text(record.get("Category")).upper()
+        if "WIP" in category:
+            add(record, "WIP")
+        elif "FG" in category:
+            add(record, "FG")
+    for record in packing_records:
+        add(record, "FG", packed=True)
+    return catalog
+
+
+def prepare_picking_lines(records, catalog, default_consignee="", default_true_consignee=""):
+    lines = []
+    for index, record in enumerate(records, start=1):
+        cultivar = picking_text(record.get("Cultivar Name"))
+        grade = picking_text(record.get("Grade")).upper()
+        raw_quantity = record.get("Volume", "")
+        consignee = picking_text(record.get("Consignee")) or picking_text(default_consignee)
+        true_consignee = picking_text(record.get("True Consignee")) or picking_text(default_true_consignee)
+        # Ignore only completely empty editor rows.
+        if not any(picking_text(record.get(name)) for name in
+                   ["Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Note"]):
+            continue
+        item = catalog.get(picking_key(cultivar))
+        quantity = picking_quantity(raw_quantity)
+        if item is None:
+            raise ValueError(f"รายการที่ {index}: กรุณาเลือกสายพันธุ์จากรายการ WIP / FG")
+        if not grade:
+            raise ValueError(f"รายการที่ {index}: กรุณาระบุเกรด FG ที่ต้องจัดส่ง")
+        if quantity is None or quantity <= 0:
+            raise ValueError(f"รายการที่ {index}: จำนวนต้องเป็นตัวเลขมากกว่า 0")
+        if not consignee or not true_consignee:
+            raise ValueError(f"รายการที่ {index}: กรุณาระบุ Consignee และ True Consignee")
+        lines.append({
+            "Cultivar Name": item["cultivar"],
+            "Export Name": " / ".join(item["export_names"]),
+            "Source Categories": " / ".join(item["sources"]),
+            "Grade": grade,
+            "Volume": quantity,
+            "Consignee": consignee,
+            "True Consignee": true_consignee,
+            "Required Category": "FG (Finished Goods)",
+            "Note": picking_text(record.get("Note")),
+        })
+    if not lines:
+        raise ValueError("กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการ")
+    return lines
+
+
+def project_picking_rows(rows, catalog):
+    # Aggregate demand inside one request only; different requests do not reserve stock.
+    demand = {}
+    for row in rows:
+        quantity = picking_quantity(row.get("Volume"))
+        if quantity is None or quantity <= 0:
+            continue
+        key = (
+            picking_text(row.get("Request ID")) or "DRAFT",
+            picking_key(row.get("Cultivar Name")),
+            picking_text(row.get("Grade")).upper(),
+        )
+        demand[key] = demand.get(key, 0.0) + quantity
+
+    projected = []
+    for row in rows:
+        result = dict(row)
+        quantity = picking_quantity(row.get("Volume"))
+        grade = picking_text(row.get("Grade")).upper()
+        key = (
+            picking_text(row.get("Request ID")) or "DRAFT",
+            picking_key(row.get("Cultivar Name")),
+            grade,
+        )
+        item = catalog.get(key[1], {})
+        fg_quantity = item.get("fg_by_grade", {}).get(grade, 0.0)
+        wip_quantity = item.get("wip_qty", 0.0)
+        request_demand = demand.get(key, 0.0)
+        if quantity is None or quantity <= 0 or not grade:
+            status = "⚠️ กรุณาตรวจสอบข้อมูลคำขอ"
+        elif fg_quantity >= request_demand:
+            status = "✅ พร้อมส่ง"
+        elif wip_quantity > 0:
+            status = "📦 รอแพ็ค"
+        else:
+            status = "📥 รอรับเข้าสินค้า"
+        result.update({
+            "Required Category": "FG (Finished Goods)",
+            "Available FG": fg_quantity,
+            "Available WIP": wip_quantity,
+            "Request Demand": request_demand,
+            "FG Shortfall": max(0.0, request_demand - fg_quantity),
+            "Status (ความพร้อม)": status,
+        })
+        projected.append(result)
+    return projected
+
+
+PICKING_SHEET_NAME = "Picking_Requests"
+
+
+def read_picking_records(worksheet):
+    values = worksheet.get_all_values()
+    if not values:
+        return []
+    headers = [str(value).strip() for value in values[0]]
+    missing = [header for header in PICKING_HEADERS if header not in headers]
+    if missing:
+        raise ValueError("หัวตาราง Picking_Requests ไม่ครบ: " + ", ".join(missing))
+    if len(headers) != len(set(headers)):
+        raise ValueError("พบชื่อคอลัมน์ซ้ำใน Picking_Requests กรุณาตรวจสอบหัวตาราง")
+    records = []
+    for row_number, values_row in enumerate(values[1:], start=2):
+        if not any(picking_text(value) for value in values_row):
+            continue
+        record = {header: values_row[index] if index < len(values_row) else ""
+                  for index, header in enumerate(headers)}
+        record["Original_Row_Index"] = row_number
+        records.append(record)
+    return records
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_cached_picking_rows(_worksheet):
+    return read_picking_records(_worksheet)
+
+
+def load_picking_requests(spreadsheet):
+    try:
+        worksheet = spreadsheet.worksheet(PICKING_SHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        return None, []
+    return worksheet, get_cached_picking_rows(worksheet)
+
+
+def picking_same_payload(existing, expected):
+    if len(existing) != len(expected):
+        return False
+    by_id = {picking_text(row.get("Line ID")): row for row in existing}
+    if len(by_id) != len(existing):
+        return False
+    for wanted in expected:
+        actual = by_id.get(wanted["Line ID"])
+        if actual is None:
+            return False
+        for header in PICKING_HEADERS:
+            if header == "Volume":
+                actual_quantity = picking_quantity(actual.get(header))
+                if actual_quantity is None or not math.isclose(actual_quantity, wanted[header], rel_tol=1e-12, abs_tol=1e-9):
+                    return False
+            elif picking_text(actual.get(header)) != picking_text(wanted.get(header)):
+                return False
+    return True
+
+
+def save_picking_request(spreadsheet, request_id, created_at, lines, shipping_date):
+    request_id = picking_text(request_id)
+    created_at = picking_text(created_at)
+    shipping_date = picking_text(shipping_date)
+    if not request_id or not created_at or not lines:
+        raise ValueError("ข้อมูลคำขอไม่ครบ กรุณาตรวจสอบก่อนบันทึก")
+    if shipping_date.upper() != "TBC":
+        try:
+            shipping_date = date.fromisoformat(shipping_date).isoformat()
+        except ValueError:
+            raise ValueError("กรุณาระบุวันจัดส่งที่ถูกต้อง หรือเลือก TBC") from None
+    else:
+        shipping_date = "TBC"
+    payload = []
+    for index, line in enumerate(lines, start=1):
+        quantity = picking_quantity(line.get("Volume"))
+        if quantity is None or quantity <= 0:
+            raise ValueError(f"รายการที่ {index}: จำนวนต้องเป็นตัวเลขมากกว่า 0")
+        for required in ["Cultivar Name", "Grade", "Consignee", "True Consignee"]:
+            if not picking_text(line.get(required)):
+                raise ValueError(f"รายการที่ {index}: กรุณาระบุ {required}")
+        record = {header: picking_text(line.get(header)) for header in PICKING_HEADERS}
+        record.update({
+            "Request ID": request_id, "Line ID": f"{request_id}-{index:03d}",
+            "Created At": created_at, "Grade": picking_text(line.get("Grade")).upper(),
+            "Volume": quantity, "Expected Shipping Date": shipping_date,
+            "Required Category": "FG (Finished Goods)",
+        })
+        payload.append(record)
+    try:
+        worksheet = spreadsheet.worksheet(PICKING_SHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        try:
+            worksheet = spreadsheet.add_worksheet(title=PICKING_SHEET_NAME, rows=1000, cols=len(PICKING_HEADERS))
+        except gspread.exceptions.APIError as creation_error:
+            # Another session may have created the same worksheet meanwhile.
+            try:
+                worksheet = spreadsheet.worksheet(PICKING_SHEET_NAME)
+            except gspread.exceptions.WorksheetNotFound:
+                raise creation_error
+    raw = worksheet.get_all_values()
+    if not raw or not any(any(picking_text(value) for value in row) for row in raw):
+        worksheet.update(range_name="A1:M1", values=[PICKING_HEADERS], value_input_option="RAW")
+    records = read_picking_records(worksheet)
+    headers = [str(header).strip() for header in worksheet.row_values(1)]
+
+    def check_existing(current_records):
+        matches = [row for row in current_records if picking_text(row.get("Request ID")) == request_id]
+        if not matches:
+            return False
+        if not picking_same_payload(matches, payload):
+            raise ValueError("พบ Request ID นี้แล้วแต่ข้อมูลไม่ตรงหรือไม่ครบ กรุณาตรวจประวัติก่อนเริ่มคำขอใหม่")
+        return True
+
+    already_saved = check_existing(records)
+    if not already_saved:
+        values = [[record.get(header, "") for header in headers] for record in payload]
+        try:
+            worksheet.append_rows(values, value_input_option="RAW")
+        except Exception:
+            # A timeout can happen after Sheets has accepted the append.
+            # Confirm the stable IDs before allowing a retry to append again.
+            if not check_existing(read_picking_records(worksheet)):
+                raise
+            already_saved = True
+    get_cached_picking_rows.clear()
+    get_cached_data.clear()
+    return {"request_id": request_id, "line_count": len(payload), "already_saved": already_saved}
+
+
+def find_delivery_column(columns, field):
+    aliases = {
+        "Cultivar Name": ["Cultivar Name", "Cultivar", "Cultivar / Product", "Product", "ชื่อ"],
+        "Grade": ["Grade", "Size"],
+        "Consignee": ["Consignee", "Consignee (ปลายทาง)"],
+        "True Consignee": ["True Consignee", "True_Consignee", "True Consignee (ปลายทางจริง)"],
+        "Expected Shipping Date": ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date"],
+    }
+    if field in {"Volume", "Available FG", "Available WIP"}:
+        return next((column for column in columns if picking_key(field) in picking_key(column)), field)
+    for alias in aliases.get(field, [field]):
+        for column in columns:
+            if picking_key(column) == picking_key(alias):
+                return column
+    return field
+
+
+def merge_delivery_requests(legacy_records, picking_records, catalog):
+    columns = list(dict.fromkeys(key for row in legacy_records for key in row))
+    rows = [dict(row, _Delivery_Source="legacy") for row in legacy_records]
+    mappings = {field: find_delivery_column(columns, field) for field in [
+        "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee",
+        "Expected Shipping Date", "Available FG", "Available WIP",
+    ]}
+    for record in project_picking_rows(picking_records, catalog):
+        row = {mappings.get(key, key): value for key, value in record.items()}
+        row["_Delivery_Source"] = "picking"
+        rows.append(row)
+    return rows
+
+
+def update_delivery_dates(spreadsheet, targets, new_value):
+    grouped = {}
+    for target in targets:
+        worksheet = target["worksheet"]
+        headers = [str(header).strip() for header in worksheet.row_values(1)]
+        date_header = target["date_header"]
+        if date_header not in headers:
+            raise ValueError(f"ไม่พบคอลัมน์ {date_header} ใน {worksheet.title}")
+        row_number = int(target["row_idx"])
+        if row_number < 2:
+            raise ValueError("เลขแถวรายการไม่ถูกต้อง")
+        group = grouped.setdefault(worksheet.title, {"worksheet": worksheet, "cells": []})
+        group["cells"].append(gspread.Cell(row=row_number, col=headers.index(date_header) + 1, value=new_value))
+    if len(grouped) == 1:
+        group = next(iter(grouped.values()))
+        group["worksheet"].update_cells(group["cells"])
+    elif grouped:
+        requests = []
+        for group in grouped.values():
+            for cell in group["cells"]:
+                requests.append({"updateCells": {
+                    "range": {"sheetId": group["worksheet"].id, "startRowIndex": cell.row - 1,
+                              "endRowIndex": cell.row, "startColumnIndex": cell.col - 1,
+                              "endColumnIndex": cell.col},
+                    "rows": [{"values": [{"userEnteredValue": {"stringValue": new_value}}]}],
+                    "fields": "userEnteredValue",
+                }})
+        spreadsheet.batch_update({"requests": requests})
+
+
+
 def render_portal_ui_styles():
     st.markdown("""<style>
-    .st-key-delivery_header h1, .st-key-stock_header h1 {
+    .st-key-delivery_header h1, .st-key-stock_header h1, .st-key-picking_header h1 {
         color: #0f172a; font-size: clamp(27px, 2.8vw, 36px); line-height: 1.3;
         letter-spacing: -.035em; padding-bottom: 8px; }
     .st-key-delivery_header [data-testid="stCaptionContainer"],
     .st-key-stock_header [data-testid="stCaptionContainer"] { color: #64748b; font-size: 14px; }
     .st-key-delivery_header [data-testid="stCaptionContainer"] p,
     .st-key-stock_header [data-testid="stCaptionContainer"] p { color: #64748b; }
+    .st-key-picking_form [data-testid="stDataFrame"] { border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+    .st-key-picking_form [data-testid="stButton"] button { background: #1d4ed8; color: #fff; border: 1px solid #1d4ed8; min-height: 44px; border-radius: 10px; }
+    .st-key-picking_form [data-testid="stButton"] button:hover { background: #1e40af; }
     .portal-section { --section-accent: #2563eb; margin: 12px 0 18px; }
     .portal-section--slate { --section-accent: #475569; }
     .portal-section--amber { --section-accent: #b45309; }
@@ -329,6 +686,7 @@ def render_portal_ui_styles():
     }
     </style>""", unsafe_allow_html=True)
 
+
 def render_section_heading(title, description, eyebrow="", tone="blue"):
     if tone not in {"blue", "slate", "amber", "teal"}:
         tone = "blue"
@@ -338,6 +696,7 @@ def render_section_heading(title, description, eyebrow="", tone="blue"):
         f'<h2>{escape(title)}</h2><p>{escape(description)}</p></header>',
         unsafe_allow_html=True,
     )
+
 
 def render_grade_summary(stock_df, total, stock_type):
     grade_names = stock_df["Grade"].astype(str).str.strip().str.upper()
@@ -360,10 +719,9 @@ def render_grade_summary(stock_df, total, stock_type):
 # ==========================================
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
-# ✨ เพิ่ม 🔧 Adjustment Module
 menu = st.sidebar.radio(
     "เลือกเมนูการใช้งาน",
-    ["🚨 Delivery Issue", "📊 Stock Summary & Details", "📈 Monthly Report", "📝 Trading Goods Registration", "✏️ Edit Registration", "🔧 Adjustment Module", "📦 Packing Module", "🚚 Shipped Out Module"],
+    ["🚨 Delivery Issue", "📋 Picking Request", "📊 Stock Summary & Details", "📈 Monthly Report", "📝 Trading Goods Registration", "✏️ Edit Registration", "📦 Packing Module", "🚚 Shipped Out Module"],
 )
 st.sidebar.markdown("---")
 st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing (Pastel Theme)")
@@ -387,16 +745,27 @@ if menu == "🚨 Delivery Issue":
     if "delivery_reschedule_success" in st.session_state:
         st.success(st.session_state.pop("delivery_reschedule_success"))
 
+    del_sheet = None
+    picking_delivery_sheet = None
+    legacy_delivery_rows = []
     try:
         del_sheet = sh.worksheet("Delivery_schedule")
-        data_del = get_cached_data("delivery", del_sheet, include_row_index=True)
-        df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
+        legacy_delivery_rows = get_cached_data("delivery", del_sheet, include_row_index=True)
     except gspread.exceptions.WorksheetNotFound:
-        st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
-        df_del = pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
-        df_del = pd.DataFrame()
+        st.info("ยังไม่มีแท็บ Delivery_schedule รายการ Picking Request ที่สร้างแล้วจะแสดงด้านล่างได้")
+    except Exception as error:
+        st.error(f"❌ โหลดรายการ Delivery เดิมไม่สำเร็จ: {error}")
+    delivery_rows = [dict(row, _Delivery_Source="legacy") for row in legacy_delivery_rows]
+    try:
+        picking_delivery_sheet, picking_delivery_rows = load_picking_requests(sh)
+        if picking_delivery_rows:
+            current_catalog = build_picking_catalog(
+                get_cached_data("main", sheet), get_cached_data("packing", packing_records_sheet),
+            )
+            delivery_rows = merge_delivery_requests(legacy_delivery_rows, picking_delivery_rows, current_catalog)
+    except Exception as error:
+        st.warning(f"ยังโหลด Picking Request ไม่สำเร็จ รายการ Delivery เดิมยังแสดงตามข้อมูลที่โหลดได้: {error}")
+    df_del = pd.DataFrame(delivery_rows) if delivery_rows else pd.DataFrame()
 
     if not df_del.empty:
         df_del.columns = [str(c).strip() for c in df_del.columns]
@@ -407,6 +776,8 @@ if menu == "🚨 Delivery Issue":
 
         if vol_col and fg_col:
             def check_readiness(row):
+                if row.get("_Delivery_Source") == "picking":
+                    return row["Status (ความพร้อม)"]
                 vol = clean_quantity(row.get(vol_col, 0))
                 onhand = clean_quantity(row.get(fg_col, 0))
                 wip_val = str(row.get(wip_col, "")).replace(",", "") if wip_col else "0"
@@ -419,9 +790,11 @@ if menu == "🚨 Delivery Issue":
                 else: return "➖ N/A"
             df_del["Status (ความพร้อม)"] = df_del.apply(check_readiness, axis=1)
 
-        date_col = next((c for c in ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date"] if c in df_del.columns), None)
+        date_col = find_delivery_column(df_del.columns, "Expected Shipping Date")
+        if date_col not in df_del.columns:
+            date_col = None
 
-        delivery_internal_columns = ["Original_Row_Index", "Is_Unscheduled", "Parsed_Delivery_Date"]
+        delivery_internal_columns = ["Original_Row_Index", "Is_Unscheduled", "Parsed_Delivery_Date", "_Delivery_Source"]
         if date_col:
             df_del[date_col] = df_del[date_col].astype(str).str.strip()
             df_del["Is_Unscheduled"] = df_del[date_col].str.casefold().isin(DELIVERY_PENDING_VALUES)
@@ -478,22 +851,21 @@ if menu == "🚨 Delivery Issue":
                         curr_dt = str(r.get(date_col, "")) if date_col else ""
                         vol = r.get(vol_col if vol_col else "Volume", 0)
 
-                        item_name = "Unknown Item"
-                        for nk in ["Cultivar Name", "Cultivar name", "Cultivar", "Export Name", "Product", "ชื่อ"]:
-                            if nk in df_del.columns and str(r.get(nk, "")).strip() and str(r.get(nk, "")).strip().lower() != 'nan':
-                                item_name = str(r.get(nk, "")).strip(); break
-
-                        item_grade = "-"
-                        for gk in ["Grade", "grade", "Size", "size"]:
-                            if gk in df_del.columns and str(r.get(gk, "")).strip() and str(r.get(gk, "")).strip().lower() != 'nan':
-                                item_grade = str(r.get(gk, "")).strip(); break
+                        cultivar_column = find_delivery_column(df_del.columns, "Cultivar Name")
+                        export_column = find_delivery_column(df_del.columns, "Export Name")
+                        item_name = picking_text(r.get(cultivar_column)) or picking_text(r.get(export_column)) or "Unknown Item"
+                        grade_column = find_delivery_column(df_del.columns, "Grade")
+                        item_grade = picking_text(r.get(grade_column)) or "-"
 
                         try: vol_disp = f"{float(vol):,.2f}" if float(vol) % 1 != 0 else f"{int(vol):,}"
                         except: vol_disp = str(vol)
 
                         disp_txt = f"บรรทัด {row_idx} | {item_name} (Grade: {item_grade}) | วันเดิม: {curr_dt} | Volume: {vol_disp}"
+                        row_source = picking_text(r.get("_Delivery_Source")) or "legacy"
+                        if row_source == "picking":
+                            disp_txt += f" | Request: {r['Request ID']}"
                         reschedule_opts.append(disp_txt)
-                        reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt}
+                        reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt, "source": row_source}
 
                     selected_items = st.multiselect(
                         "เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts,
@@ -519,29 +891,32 @@ if menu == "🚨 Delivery Issue":
                             st.error("❌ กรุณาระบุวันจัดส่งใหม่ หรือเลือก TBC หากยังไม่มีกำหนด")
                         else:
                             try:
-                                headers = [str(header).strip() for header in del_sheet.row_values(1)]
-                                if date_col not in headers:
-                                    st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
-                                else:
-                                    col_idx = headers.index(date_col) + 1
-                                    new_value = "TBC" if mark_tbc else new_date.isoformat()
-                                    cells_to_update = []
-                                    success_rows = []
-                                    for selected in selected_items:
-                                        target_row = int(reschedule_map[selected]["row_idx"])
-                                        cells_to_update.append(gspread.Cell(row=target_row, col=col_idx, value=new_value))
-                                        success_rows.append(str(target_row))
-                                    del_sheet.update_cells(cells_to_update)
+                                new_value = "TBC" if mark_tbc else new_date.isoformat()
+                                targets = []
+                                success_rows = []
+                                for selected in selected_items:
+                                    item = reschedule_map[selected]
+                                    is_picking = item["source"] == "picking"
+                                    target_sheet = picking_delivery_sheet if is_picking else del_sheet
+                                    if target_sheet is None:
+                                        raise ValueError("ไม่พบแหล่งข้อมูลของรายการที่เลือก กรุณาโหลดหน้าใหม่")
+                                    target_row = int(item["row_idx"])
+                                    targets.append({
+                                        "worksheet": target_sheet, "row_idx": target_row,
+                                        "date_header": "Expected Shipping Date" if is_picking else date_col,
+                                    })
+                                    success_rows.append(f"{target_sheet.title} แถว {target_row}")
+                                update_delivery_dates(sh, targets, new_value)
                             except Exception as error:
                                 st.error(f"❌ บันทึกกำหนดการไม่สำเร็จ กรุณาลองใหม่: {error}")
                             else:
-                                if date_col in headers:
-                                    get_cached_data.clear()
-                                    schedule_label = "TBC (รอยืนยันวันจัดส่งใหม่)" if mark_tbc else new_date.strftime("%d/%m/%Y")
-                                    st.session_state["delivery_reschedule_success"] = (
-                                        f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว"
-                                    )
-                                    st.rerun()
+                                get_cached_data.clear()
+                                get_cached_picking_rows.clear()
+                                schedule_label = "TBC (รอยืนยันวันจัดส่งใหม่)" if mark_tbc else new_date.strftime("%d/%m/%Y")
+                                st.session_state["delivery_reschedule_success"] = (
+                                    f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับ {', '.join(success_rows)} เรียบร้อยแล้ว"
+                                )
+                                st.rerun()
 
         render_section_heading(
             "กำหนดการจัดส่ง", "เรียงวันส่งจากก่อนถึงหลัง พร้อมยอดรวมส่งของแต่ละวัน",
@@ -606,6 +981,184 @@ if menu == "🚨 Delivery Issue":
     else:
         st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule'")
 
+elif menu == "📋 Picking Request":
+    render_portal_ui_styles()
+    with st.container(key="picking_header"):
+        st.title("Picking Request")
+        st.caption("สร้างคำขอจัดส่งหลายสายพันธุ์จาก WIP / FG และเทียบความพร้อมของ FG กับสต็อกปัจจุบัน")
+    st.info("คำขอนี้ไม่จองหรือตัดสต็อก สินค้าที่ส่งต้องเป็น FG เท่านั้น ส่วน WIP ใช้แสดงว่าต้องรอ Process")
+
+    def reset_picking_draft():
+        next_epoch = int(st.session_state.get("picking_draft_epoch", 0)) + 1
+        for state_key in list(st.session_state):
+            if state_key.startswith("picking_draft_"):
+                del st.session_state[state_key]
+        st.session_state["picking_draft_epoch"] = next_epoch
+
+    epoch = int(st.session_state.get("picking_draft_epoch", 0))
+    if "picking_draft_request_id" not in st.session_state:
+        created_at = datetime.now(ZoneInfo("Asia/Bangkok"))
+        st.session_state["picking_draft_request_id"] = f"PR-{created_at:%Y%m%d}-{uuid4().hex[:12].upper()}"
+        st.session_state["picking_draft_created_at"] = created_at.isoformat(timespec="seconds")
+    request_id = st.session_state["picking_draft_request_id"]
+    saved_result = st.session_state.get("picking_draft_saved")
+    draft_saved = bool(saved_result)
+    request_col, reset_col = st.columns([3, 1])
+    with request_col:
+        st.caption(f"หมายเลขคำขอ: {request_id}")
+    with reset_col:
+        st.button("เริ่มคำขอใหม่", key="picking_new_request", on_click=reset_picking_draft, width="stretch")
+    if draft_saved:
+        st.success(f"บันทึก {saved_result['request_id']} จำนวน {saved_result['line_count']:,} รายการแล้ว สามารถติดตามและแก้วันส่งใน Delivery Issue")
+
+    catalog = build_picking_catalog(
+        get_cached_data("main", sheet),
+        get_cached_data("packing", packing_records_sheet),
+    )
+    catalog_by_name = {item["cultivar"]: item for item in catalog.values()}
+    cultivar_options = sorted(catalog_by_name, key=str.casefold)
+    render_section_heading(
+        "สร้างคำขอจัดส่ง FG", "กำหนดผู้รับและวันส่งร่วมกัน แล้วแก้จำนวน เกรด และผู้รับแยกแต่ละรายการได้",
+        eyebrow="NEW PICKING REQUEST", tone="blue",
+    )
+    with st.container(key="picking_form", border=True):
+        common_left, common_right = st.columns(2)
+        with common_left:
+            default_consignee = st.text_input(
+                "Consignee เริ่มต้น", key=f"picking_draft_{epoch}_consignee", disabled=draft_saved,
+                help="ใช้กับรายการที่เว้น Consignee ในตารางไว้ สามารถแก้แยกแต่ละรายการได้",
+            )
+        with common_right:
+            default_true_consignee = st.text_input(
+                "True Consignee เริ่มต้น", key=f"picking_draft_{epoch}_true_consignee", disabled=draft_saved,
+                help="ใช้กับรายการที่เว้น True Consignee ในตารางไว้ สามารถแก้แยกแต่ละรายการได้",
+            )
+        date_left, date_right = st.columns(2)
+        with date_left:
+            request_tbc = st.checkbox(
+                "TBC — ยังไม่กำหนดวันจัดส่ง", key=f"picking_draft_{epoch}_tbc", value=True,
+                disabled=draft_saved,
+            )
+        with date_right:
+            request_date = st.date_input(
+                "วันจัดส่ง", value=datetime.now(ZoneInfo("Asia/Bangkok")).date(),
+                key=f"picking_draft_{epoch}_date", disabled=draft_saved or request_tbc,
+            )
+        shipping_date = "TBC" if request_tbc else request_date.isoformat() if request_date else ""
+        selected_cultivars = st.multiselect(
+            "เลือกสายพันธุ์จาก WIP / FG", cultivar_options,
+            format_func=lambda name: f"{name} · {' / '.join(catalog_by_name[name]['sources'])}",
+            key=f"picking_draft_{epoch}_cultivars", disabled=draft_saved,
+        )
+        st.caption("กรอกเกรด FG ที่ต้องส่ง เช่น BIG / SMALL / MIX / F และจำนวนที่ต้องการ ผู้รับที่เว้นว่างจะใช้ค่าเริ่มต้นด้านบน")
+        editor_columns = ["Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Note"]
+        selected_tuple = tuple(selected_cultivars)
+        if st.session_state.get("picking_draft_selection") != selected_tuple:
+            previous_lines = st.session_state.get("picking_draft_lines", [])
+            editor_rows = [dict(row) for row in previous_lines if row.get("Cultivar Name") in selected_cultivars]
+            existing_cultivars = {row.get("Cultivar Name") for row in editor_rows}
+            for cultivar in selected_cultivars:
+                if cultivar not in existing_cultivars:
+                    fg_grades = list(catalog_by_name[cultivar]["fg_by_grade"])
+                    editor_rows.append({
+                        "Cultivar Name": cultivar, "Grade": fg_grades[0] if len(fg_grades) == 1 else "",
+                        "Volume": 0.0, "Consignee": "", "True Consignee": "", "Note": "",
+                    })
+            st.session_state["picking_draft_editor_input"] = pd.DataFrame(editor_rows, columns=editor_columns)
+            st.session_state["picking_draft_editor_version"] = int(st.session_state.get("picking_draft_editor_version", 0)) + 1
+            st.session_state["picking_draft_selection"] = selected_tuple
+        edited_records = []
+        if selected_cultivars:
+            edited_frame = st.data_editor(
+                st.session_state["picking_draft_editor_input"], width="stretch", hide_index=True,
+                num_rows="dynamic", disabled=draft_saved,
+                key=f"picking_draft_{epoch}_editor_{st.session_state['picking_draft_editor_version']}",
+                column_config={
+                    "Cultivar Name": st.column_config.SelectboxColumn("สายพันธุ์", options=selected_cultivars, required=True, width="medium"),
+                    "Grade": st.column_config.TextColumn("เกรด FG ที่ต้องส่ง", required=True, width="small"),
+                    "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%.2f", required=True),
+                    "Consignee": st.column_config.TextColumn("Consignee", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
+                    "True Consignee": st.column_config.TextColumn("True Consignee", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
+                    "Note": st.column_config.TextColumn("หมายเหตุ", width="medium"),
+                },
+            )
+            edited_records = edited_frame.to_dict("records")
+            st.session_state["picking_draft_lines"] = edited_records
+            st.caption("เพิ่มแถวได้เมื่อต้องการสายพันธุ์เดิมต่างเกรด หากสายพันธุ์และเกรดซ้ำ ระบบจะเทียบยอดรวมภายใน Request เดียวกัน")
+        else:
+            st.caption("เลือกอย่างน้อย 1 สายพันธุ์เพื่อเริ่มกรอกรายการ")
+
+        if edited_records:
+            try:
+                preview_lines = prepare_picking_lines(
+                    edited_records, catalog, default_consignee or "—", default_true_consignee or "—",
+                )
+                preview_rows = project_picking_rows([
+                    dict(line, **{"Request ID": request_id, "Expected Shipping Date": shipping_date})
+                    for line in preview_lines
+                ], catalog)
+            except ValueError:
+                st.caption("กรอกเกรดและจำนวนที่มากกว่า 0 ให้ครบเพื่อดูความพร้อมของ FG")
+            else:
+                st.markdown("**ความพร้อมตาม On hand ปัจจุบัน**")
+                st.dataframe(
+                    format_df_quantity(pd.DataFrame(preview_rows)), width="stretch", hide_index=True,
+                    column_order=["Cultivar Name", "Grade", "Volume", "Request Demand", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)"],
+                    column_config={
+                        "Cultivar Name": st.column_config.TextColumn("สายพันธุ์", width="medium"),
+                        "Grade": "เกรด FG", "Volume": "จำนวนส่ง", "Request Demand": "ยอดรวม Request / เกรด",
+                        "Available FG": "FG ตรงเกรด", "Available WIP": "WIP รอ Process",
+                        "FG Shortfall": "FG ที่ยังขาด", "Status (ความพร้อม)": "ความพร้อม",
+                    },
+                )
+                st.caption("WIP ไม่ถูกนับเป็น FG พร้อมส่ง และไม่สมมติผลผลิตหลัง Process ความพร้อมของแต่ละ Request เทียบ On hand แยกกันโดยไม่กันสต็อก")
+
+        if st.button("สร้าง Picking Request", key="picking_save_request", type="primary", disabled=draft_saved or not selected_cultivars):
+            try:
+                if not shipping_date:
+                    raise ValueError("กรุณาระบุวันจัดส่งหรือเลือก TBC")
+                lines_to_save = prepare_picking_lines(edited_records, catalog, default_consignee, default_true_consignee)
+                with st.spinner("กำลังบันทึก Picking Request..."):
+                    result = save_picking_request(
+                        sh, request_id, st.session_state["picking_draft_created_at"], lines_to_save, shipping_date,
+                    )
+            except Exception as error:
+                st.error(f"ยังยืนยันการบันทึกไม่ได้: {error}")
+                st.caption("คำขอยังคงใช้หมายเลขเดิม หากการเชื่อมต่อขัดข้องให้กดบันทึกซ้ำโดยไม่แก้ข้อมูล ระบบจะตรวจคำขอเดิมก่อนเพื่อป้องกันรายการซ้ำ")
+            else:
+                st.session_state["picking_draft_saved"] = result
+                get_cached_data.clear()
+                get_cached_picking_rows.clear()
+                st.rerun()
+
+    render_section_heading(
+        "ติดตาม Picking Request", "แสดงคำขอที่สร้างแล้ว พร้อมเทียบสต็อก FG ปัจจุบัน ส่วนรายการ Delivery เดิมยังคงแสดงใน Delivery Issue",
+        eyebrow="REQUEST HISTORY", tone="blue",
+    )
+    try:
+        _, picking_history_rows = load_picking_requests(sh)
+        projected_history = project_picking_rows(picking_history_rows, catalog)
+    except Exception as error:
+        st.error(f"โหลดประวัติ Picking Request ไม่สำเร็จ: {error}")
+    else:
+        if projected_history:
+            request_ids = list(dict.fromkeys(str(row.get("Request ID", "")) for row in projected_history if row.get("Request ID")))
+            request_ids.reverse()
+            history_id = st.selectbox("เลือก Request เพื่อดูรายละเอียด", request_ids, key="picking_history_request")
+            selected_history = [row for row in projected_history if str(row.get("Request ID", "")) == history_id]
+            st.dataframe(
+                format_df_quantity(pd.DataFrame(selected_history)), width="stretch", hide_index=True,
+                column_order=["Request ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Expected Shipping Date", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)", "Required Category", "Source Categories", "Note"],
+                column_config={
+                    "Original_Row_Index": None, "Line ID": None,
+                    "Cultivar Name": "สายพันธุ์", "Grade": "เกรด FG", "Volume": "จำนวนส่ง",
+                    "Expected Shipping Date": "วันจัดส่ง", "Available FG": "FG ตรงเกรด",
+                    "Available WIP": "WIP รอ Process", "FG Shortfall": "FG ที่ยังขาด",
+                    "Required Category": "ประเภทที่จัดส่ง", "Source Categories": "แหล่งอ้างอิง",
+                },
+            )
+        else:
+            st.caption("ยังไม่มี Picking Request เมื่อสร้างคำขอใหม่ รายการจะแสดงที่นี่และใน Delivery Issue")
 
 # ==========================================
 # หน้าที่ 2: Stock Summary & Details
@@ -682,6 +1235,9 @@ elif menu == "📊 Stock Summary & Details":
             '</div></div>', unsafe_allow_html=True,
         )
 
+        from html import escape
+
+        # ใช้สีและรูปแบบเฉพาะ Matrix เพื่อแยก WIP / FG อย่างชัดเจน
         st.markdown("""<style>
         .stock-matrix { --accent: #b45309; --deep: #92400e; --tint: #fffbeb;
             --soft: #fef3c7; --line: #fde68a; --rgb: 217, 119, 6;
@@ -860,7 +1416,6 @@ elif menu == "📊 Stock Summary & Details":
                     st.markdown(f'<div class="portal-empty">ยังไม่มีรายการสินค้า {stock_type} คงเหลือในขณะนี้</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="portal-empty">ยังไม่มีข้อมูลสต็อกในระบบ เมื่อบันทึกรับสินค้าแล้ว ยอดคงเหลือจะแสดงที่หน้านี้</div>', unsafe_allow_html=True)
-
 # ==========================================
 # หน้าที่ 3: Monthly Report
 # ==========================================
@@ -1113,6 +1668,7 @@ elif menu == "📝 Trading Goods Registration":
             sheet.append_row(values=row_to_insert, value_input_option='USER_ENTERED')
             get_cached_data.clear()
             
+            # ✨ เพิ่มส่วนนี้: ล้างค่า Checkbox 'To be decided' ที่ค้างใน Session State ทิ้ง
             keys_to_clear = ["reg_tbd_insp", "reg_insp", "reg_tbd_ir", "reg_ir", "reg_tbd_ship", "reg_ship", "reg_tbd_type", "reg_type", "reg_rec_dt"]
             for k in keys_to_clear:
                 if k in st.session_state:
@@ -1200,6 +1756,7 @@ elif menu == "✏️ Edit Registration":
 
                         old_insp = str(current_data.get("Inspection Req.", "No"))
                         insp_con = st.container()
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_insp = st.checkbox("To be decided", value=(old_insp == "To be decided"), key=f"edit_tbd_insp_{matched_row_idx}")
                         insp_opts = ["Yes", "No"]
                         e_insp_val = insp_con.selectbox("10. Inspection Req.", insp_opts, index=insp_opts.index(old_insp) if old_insp in insp_opts else 0, disabled=e_is_tbd_insp, key=f"edit_insp_{matched_row_idx}")
@@ -1207,6 +1764,7 @@ elif menu == "✏️ Edit Registration":
 
                         old_ir = str(current_data.get("IR Req.", "No"))
                         ir_con = st.container()
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_ir = st.checkbox("To be decided", value=(old_ir == "To be decided"), key=f"edit_tbd_ir_{matched_row_idx}")
                         ir_opts = ["Yes", "No"]
                         e_ir_val = ir_con.selectbox("11. IR Req.", ir_opts, index=ir_opts.index(old_ir) if old_ir in ir_opts else 0, disabled=e_is_tbd_ir, key=f"edit_ir_{matched_row_idx}")
@@ -1214,6 +1772,7 @@ elif menu == "✏️ Edit Registration":
 
                         old_date = str(current_data.get("Shipment date", ""))
                         ship_con = st.container()
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_ship = st.checkbox("To be decided", value=(old_date == "To be decided"), key=f"edit_tbd_ship_{matched_row_idx}")
                         try: default_dt = pd.to_datetime(old_date, dayfirst=True).date() if old_date != "To be decided" and old_date.strip() else date.today()
                         except: default_dt = date.today()
@@ -1222,6 +1781,7 @@ elif menu == "✏️ Edit Registration":
 
                         old_type = str(current_data.get("Type", ""))
                         type_con = st.container()
+                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_type = st.checkbox("To be decided", value=(old_type == "To be decided"), key=f"edit_tbd_type_{matched_row_idx}")
                         type_opts = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product"]
                         e_type_val = type_con.selectbox("13. Type", type_opts, index=type_opts.index(old_type) if old_type in type_opts else 0, disabled=e_is_tbd_type, key=f"edit_type_{matched_row_idx}")
@@ -1255,100 +1815,6 @@ elif menu == "✏️ Edit Registration":
                         st.rerun()
     else:
         st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
-
-# ==========================================
-# หน้าที่ 5.5: 🔧 Adjustment Module (ใหม่)
-# ==========================================
-elif menu == "🔧 Adjustment Module":
-    st.title("🔧 Adjustment Module (WIP & FG)")
-    st.markdown("ใช้สำหรับปรับแก้ตัวเลขยอด WIP และ FG ในกรณีที่ลงข้อมูลผิดพลาดหรือยอดไม่ตรงกับหน้างานจริง")
-
-    # ดึงข้อมูลจากชีตหลัก
-    data_main = get_cached_data("main", sheet)
-    df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
-    
-    # ดึงข้อมูลจากชีตที่แพ็กแล้ว
-    records_data = get_cached_data("packing", packing_records_sheet)
-    df_packing_fg = pd.DataFrame(records_data) if records_data else pd.DataFrame()
-
-    adj_options = []
-    adj_map = {}
-
-    if not df_main.empty:
-        df_main.columns = [str(c).strip() for c in df_main.columns]
-        df_main["Original_Row_Index"] = df_main.index + 2
-        df_main["Clean_Qty"] = df_main["Quantity"].apply(clean_quantity) if "Quantity" in df_main.columns else 0.0
-        
-        for _, r in df_main.iterrows():
-            lot_no = str(r.get("THAI STICK Lot. No.", "")).strip() or str(r.get("Supplier Lot. No.", "")).strip() or "No-Lot"
-            cat = str(r.get("Category", ""))
-            prod_name = str(r.get("Cultivar Name", ""))
-            grade_val = str(r.get("Grade", ""))
-            qty = float(r["Clean_Qty"])
-            
-            disp = f"[Main - {cat}] Lot: {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {qty:,.2f}"
-            adj_options.append(disp)
-            adj_map[disp] = {
-                "source": "main", "row_idx": r["Original_Row_Index"], 
-                "lot_no": lot_no, "current_qty": qty, "product": prod_name
-            }
-
-    if not df_packing_fg.empty:
-        df_packing_fg.columns = [str(c).strip() for c in df_packing_fg.columns]
-        df_packing_fg["Original_Row_Index"] = df_packing_fg.index + 2
-        df_packing_fg["Clean_Qty"] = df_packing_fg["Quantity"].apply(clean_quantity) if "Quantity" in df_packing_fg.columns else 0.0
-        
-        for _, r in df_packing_fg.iterrows():
-            lot_no = str(r.get("Generated FG Lot No.", "")).strip() or str(r.get("THAI STICK Lot. No.", "")).strip()
-            prod_name = str(r.get("Export Name", ""))
-            grade_val = str(r.get("Grade", ""))
-            qty = float(r["Clean_Qty"])
-            
-            disp = f"[Packed FG] Lot: {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {qty:,.2f}"
-            adj_options.append(disp)
-            adj_map[disp] = {
-                "source": "packing_records", "row_idx": r["Original_Row_Index"],
-                "lot_no": lot_no, "current_qty": qty, "product": prod_name
-            }
-
-    selected_item = st.selectbox("🔍 เลือกรายการที่ต้องการปรับแก้ยอด (ค้นหาได้)", ["-- กรุณาเลือก --"] + adj_options)
-    
-    if selected_item != "-- กรุณาเลือก --":
-        info = adj_map[selected_item]
-        with st.form("adjustment_form"):
-            st.info(f"**กำลังปรับแก้ยอดของ:** {selected_item}")
-            new_qty = st.number_input("จำนวนยอดที่ถูกต้อง (New Quantity)", min_value=0.0, step=0.1, value=float(info["current_qty"]))
-            remark = st.text_input("เหตุผลในการปรับยอด (Reason for adjustment)", placeholder="ระบุเหตุผล เช่น คีย์ผิด, ยอดไม่ตรงจริง")
-            
-            if st.form_submit_button("💾 ยืนยันการปรับแก้ยอด"):
-                try:
-                    if info["source"] == "main":
-                        headers = [str(h).strip() for h in sheet.row_values(1)]
-                        qty_idx = headers.index("Quantity") + 1 if "Quantity" in headers else None
-                        if qty_idx:
-                            sheet.update_cell(info["row_idx"], qty_idx, new_qty)
-                        else:
-                            st.error("ไม่พบคอลัมน์ 'Quantity' ในชีตหลัก")
-                            st.stop()
-                            
-                    elif info["source"] == "packing_records":
-                        headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
-                        qty_idx = headers.index("Quantity") + 1 if "Quantity" in headers else 8
-                        packing_records_sheet.update_cell(info["row_idx"], qty_idx, new_qty)
-
-                    # บันทึกลง Log
-                    log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    adjustment_sheet.append_row([
-                        log_time, info["source"], info["lot_no"], info["product"], 
-                        info["current_qty"], new_qty, remark, str(date.today())
-                    ], value_input_option='USER_ENTERED')
-                        
-                    get_cached_data.clear()
-                    st.success(f"✅ ปรับแก้ยอด Lot: {info['lot_no']} จากเดิม {info['current_qty']} เป็น {new_qty} สำเร็จเรียบร้อยแล้ว!")
-                    time.sleep(1.5)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
 # หน้าที่ 6: Packing Module
@@ -1396,6 +1862,7 @@ elif menu == "📦 Packing Module":
                     qty = float(r["Clean_Qty"])
                     row_idx = r["Original_Row_Index"]
                     
+                    # ✨ ดึง Supplier Name
                     supplier_name = str(r.get("Supplier Name", "")).strip()
                     if not supplier_name: supplier_name = "ไม่ระบุ"
                     
@@ -1473,12 +1940,15 @@ elif menu == "📦 Packing Module":
                                 st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
                             else:
                                 with st.spinner("⏳ กำลังบันทึกข้อมูล..."):
-                                    # ✨ แก้ไขปัญหาอัปเดตลงผิดคอลัมน์ โดยดึง Header จริงจาก Sheet ปัจจุบันมาใช้
-                                    sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
-                                    col_end_letter = chr(64 + len(sheet_headers)).upper()
+                                    latest_headers = [
+                                        "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
+                                        "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
+                                        "Shipment date", "Type", "Status", "Packing date"
+                                    ]
+                                    col_end_letter = chr(64 + len(latest_headers)).upper()
                                     
                                     combined_source_lots = [] 
-                                    combined_suppliers = []
+                                    combined_suppliers = [] # ✨ เก็บชื่อ Supplier
                                     
                                     for disp, w_qty in wip_withdrawals.items():
                                         if w_qty > 0:
@@ -1491,30 +1961,25 @@ elif menu == "📦 Packing Module":
                                             if supplier not in combined_suppliers:
                                                 combined_suppliers.append(supplier)
                                             
-                                            # ✨ ดึงค่า row เดิมจาก Sheet มาเตรียมอัปเดต
-                                            current_row_values = sheet.row_values(row_idx)
-                                            while len(current_row_values) < len(sheet_headers):
-                                                current_row_values.append("")
-                                            
-                                            r_dict = {sheet_headers[i]: current_row_values[i] for i in range(len(sheet_headers))}
-                                            
+                                            r_dict = info["row_data"]
                                             remaining_wip = info["qty"] - w_qty
                                             new_status = "Packing done" if remaining_wip <= 0 else "Pending Packing"
                                             remaining_wip = max(0.0, remaining_wip)
                                             
-                                            r_dict["Quantity"] = str(float(remaining_wip))
+                                            r_dict["Quantity"] = float(remaining_wip)
                                             r_dict["Status"] = new_status
                                             
-                                            row_values = [str(r_dict.get(h, "")) for h in sheet_headers]
+                                            row_values = [str(r_dict.get(h, "")) for h in latest_headers]
                                             sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[row_values], value_input_option='USER_ENTERED')
 
                                     source_lots_str = ", ".join(combined_source_lots) if combined_source_lots else "TS-MIX"
                                     base_lot = combined_source_lots[0] if combined_source_lots else "TS-MIX"
-                                    suppliers_str = ", ".join(combined_suppliers) if combined_suppliers else "ไม่ระบุ" 
+                                    suppliers_str = ", ".join(combined_suppliers) if combined_suppliers else "ไม่ระบุ" # ✨ รวมชื่อ Supplier
 
                                     breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
                                     log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     
+                                    # ✨ บันทึก Log พร้อม Supplier Name
                                     packing_log_row = [
                                         log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, breakdown_str, 
                                         float(total_packed_output), float(waste_qty), packing_date_str, note
@@ -1529,6 +1994,7 @@ elif menu == "📦 Packing Module":
                                             created_count += 1
                                             custom_fg_lot = f"{base_lot}-FG{created_count}-{g_type}"
                                             
+                                            # ✨ บันทึก Record พร้อม Supplier Name
                                             rec_row = [
                                                 log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, custom_fg_lot, 
                                                 g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
@@ -1659,9 +2125,11 @@ elif menu == "🚚 Shipped Out Module":
                     qty = item["qty"]
 
                     if source == "main":
+                        # ✨ แก้ไขใหม่: ดึง Header จาก Google Sheets จริงมาเทียบชื่อคอลัมน์ เพื่อป้องกันคอลัมน์เพี้ยน
                         sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
                         current_row_values = sheet.row_values(row_idx)
                         
+                        # เติมช่องว่างให้ครบตามจำนวน Header
                         while len(current_row_values) < len(sheet_headers):
                             current_row_values.append("")
 
@@ -1671,15 +2139,18 @@ elif menu == "🚚 Shipped Out Module":
                         remaining_qty = max(0.0, current_qty - qty)
                         new_status = "Delivered" if remaining_qty <= 0 else ("Pending Packing" if "WIP" in item["category"] else "Trading Goods Received to Stock")
 
+                        # อัปเดตค่าเฉพาะคอลัมน์ Quantity และ Status ตามชื่อจริง
                         row_dict["Quantity"] = str(remaining_qty)
                         row_dict["Status"] = new_status
 
+                        # จัดเรียงข้อมูลกลับลง List ตามตำแหน่ง Header ปัจจุบันในชีต
                         updated_row_values = [str(row_dict.get(h, "")) for h in sheet_headers]
                         col_end_letter = chr(64 + len(sheet_headers)).upper()
                         
                         sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[updated_row_values], value_input_option='USER_ENTERED')
 
                     elif source == "packing_records":
+                        # ✨ แก้ไขใหม่: ค้นหาตำแหน่งคอลัมน์ Quantity จากชื่อ Header จริงใน Packing_Records
                         pack_headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
                         qty_col_idx = pack_headers.index("Quantity") + 1 if "Quantity" in pack_headers else 8
                         
