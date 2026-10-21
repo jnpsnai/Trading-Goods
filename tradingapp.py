@@ -33,7 +33,7 @@ st.markdown(
 )
 
 # ==========================================
-# 2. ฟังก์ชัน Cache
+# 2. ฟังก์ชัน Cache ที่ปลอดภัย (แยกจำแต่ละ Sheet เด็ดขาด)
 # ==========================================
 @st.cache_data(ttl=30, show_spinner=False)
 def get_cached_data(sheet_name, _sheet, include_row_index=False):
@@ -46,20 +46,24 @@ def get_cached_data(sheet_name, _sheet, include_row_index=False):
         data = []
         
         for sheet_row, r in enumerate(rows[1:], start=2):
+            # กรองบรรทัดที่ว่างเปล่าทิ้ง ป้องกันตารางบวม
             if not any(str(cell).strip() for cell in r):
                 continue
+                
             while len(r) < len(headers):
                 r.append("")
+            
             row_dict = {headers[i]: r[i] for i in range(len(headers))}
             if include_row_index:
                 row_dict["Original_Row_Index"] = sheet_row
             data.append(row_dict)
+            
         return data
-    except Exception:
+    except Exception as e:
         return []
 
 # ==========================================
-# 3. ฟังก์ชันเชื่อมต่อ Google Sheets
+# 3. ฟังก์ชันเชื่อมต่อ Google Sheets (โหลดครั้งเดียว ประหยัดโควตา API)
 # ==========================================
 SHEET_NAME = "Trading Data Log"
 
@@ -100,6 +104,8 @@ def init_google_sheets(sheet_name):
         "Adjustment_Log", "1000", "8",
         ["Timestamp", "Source", "Lot No.", "Product Name", "Old Quantity", "New Quantity", "Reason", "Adjusted Date"]
     )
+    
+    # ✨ เพิ่ม Sheet สำหรับ Picking Request Module (ใหม่)
     picking_request_sheet = get_or_create_worksheet(
         "Picking_Request_Log", "1000", "14",
         ["Timestamp", "Source Category", "Source Lot", "Cultivar Name", "Target Grade", "Request Qty", 
@@ -143,6 +149,8 @@ def format_df_quantity(df):
         df_copy = df.copy()
         for col in df_copy.columns:
             col_str = str(col).lower()
+            
+            # ✨ 1. จัดการ Format วันที่แบบขั้นสูง
             date_keywords = ["date", "วันที่", "timestamp"]
             if any(k in col_str for k in date_keywords):
                 def format_date(x):
@@ -150,14 +158,30 @@ def format_df_quantity(df):
                         return x
                     try:
                         d_str = str(x).strip().split(" ")[0]
-                        if re.match(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}$', d_str): dt = pd.to_datetime(d_str)
-                        else: dt = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
-                        if pd.notna(dt): return dt.strftime('%d/%m/%Y')
+                        import re
+                        if re.match(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}$', d_str):
+                            dt = pd.to_datetime(d_str)
+                        elif re.match(r'^\d{1,2}[-/]\d{1,2}[-/]\d{4}$', d_str):
+                            parts = re.split(r'[-/]', d_str)
+                            p1, p2, p3 = int(parts[0]), int(parts[1]), int(parts[2])
+                            if p1 > 12: 
+                                dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
+                            elif p2 > 12: 
+                                dt = pd.to_datetime(f"{p3}-{p1:02d}-{p2:02d}")
+                            else:
+                                dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
+                        else:
+                            dt = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
+                        
+                        if pd.notna(dt):
+                            return dt.strftime('%d/%m/%Y')
                         return x
-                    except: return x
+                    except:
+                        return x
                 df_copy[col] = df_copy[col].apply(format_date)
 
-            keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ", "available", "wip", "fg"]
+            # 📦 2. จัดการลูกน้ำ (,) สำหรับคอลัมน์ตัวเลขและจำนวน
+            keywords = ["qty", "quantity", "amount", "total", "price", "ยอด", "จำนวน", "ราคา", "น้ำหนัก", "weight", "มูลค่า", "volume", "ปริมาณ", "available", "wip", "fg", "request qty"]
             is_target_col = any(k in col_str for k in keywords)
             ignore_kws = ["year", "ปี", "lot", "id", "เลข", "no.", "รหัส"]
             is_ignore = any(ig in col_str for ig in ignore_kws)
@@ -177,25 +201,163 @@ def format_df_quantity(df):
                             except: return match.group(0)
                         return re.sub(r'\b\d+(?:\.\d+)?\b', repl, clean_str)
                 df_copy[col] = df_copy[col].apply(format_mixed)
+                
         return df_copy
     return df
 
+def render_portal_ui_styles():
+    st.markdown("""<style>
+    .st-key-delivery_header h1, .st-key-stock_header h1 {
+        color: #0f172a; font-size: clamp(27px, 2.8vw, 36px); line-height: 1.3;
+        letter-spacing: -.035em; padding-bottom: 8px; }
+    .st-key-delivery_header [data-testid="stCaptionContainer"],
+    .st-key-stock_header [data-testid="stCaptionContainer"] { color: #64748b; font-size: 14px; }
+    .st-key-delivery_header [data-testid="stCaptionContainer"] p,
+    .st-key-stock_header [data-testid="stCaptionContainer"] p { color: #64748b; }
+    .portal-section { --section-accent: #2563eb; margin: 12px 0 18px; }
+    .portal-section--slate { --section-accent: #475569; }
+    .portal-section--amber { --section-accent: #b45309; }
+    .portal-section--teal { --section-accent: #0f766e; }
+    .portal-section__eyebrow { color: var(--section-accent); font-size: 11px;
+        font-weight: 750; letter-spacing: .12em; margin-bottom: 6px; }
+    .portal-section h2 { margin: 0; padding: 0; color: #0f172a;
+        font-size: 21px; line-height: 1.45; font-weight: 750; }
+    .portal-section p { margin: 6px 0 0; color: #64748b; font-size: 14px; line-height: 1.7; }
+    .st-key-delivery_overview [data-testid="stHorizontalBlock"],
+    .st-key-stock_overview [data-testid="stHorizontalBlock"] {
+        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .st-key-stock_overview [data-testid="stHorizontalBlock"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .st-key-delivery_overview [data-testid="stColumn"],
+    .st-key-stock_overview [data-testid="stColumn"] { min-width: 0 !important; width: auto !important; }
+    .st-key-delivery_overview [data-testid="stMetric"],
+    .st-key-stock_overview [data-testid="stMetric"] {
+        padding: 18px 20px; background: #fff; border: 1px solid #e2e8f0;
+        border-top: 3px solid #2563eb; border-radius: 14px; box-shadow: 0 3px 12px #0f172a04; }
+    .st-key-delivery_overview [data-testid="stMetricLabel"] p,
+    .st-key-stock_overview [data-testid="stMetricLabel"] p { color: #475569; font-size: 13px; line-height: 1.5;
+        white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
+    .st-key-delivery_overview [data-testid="stMetricValue"],
+    .st-key-stock_overview [data-testid="stMetricValue"] {
+        color: #0f172a; font-size: 30px; font-weight: 750; font-variant-numeric: tabular-nums; }
+    .st-key-delivery_overview [data-testid="stColumn"]:nth-child(3) [data-testid="stMetric"] { border-top-color: #0f766e; }
+    .st-key-delivery_overview [data-testid="stColumn"]:nth-child(4) [data-testid="stMetric"] { border-top-color: #94a3b8; }
+    .st-key-stock_overview [data-testid="stColumn"]:first-child [data-testid="stMetric"] { border-top-color: #334155; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(2) [data-testid="stMetric"] { border-top-color: #d97706; background: #fffcf5; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(2) [data-testid="stMetricValue"] { color: #92400e; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(3) [data-testid="stMetric"] { border-top-color: #0f766e; background: #f6fefc; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(3) [data-testid="stMetricValue"] { color: #115e59; }
+    .portal-balance { margin: 8px 0 24px; padding: 16px 20px; background: #f8fafc;
+        border: 1px solid #e2e8f0; border-radius: 12px; }
+    .portal-balance__labels { display: flex; justify-content: space-between; gap: 12px;
+        margin-bottom: 10px; color: #475569; font-size: 12px; }
+    .portal-balance__labels strong { font-weight: 700; }
+    .portal-balance__wip { color: #92400e; }
+    .portal-balance__fg { color: #115e59; }
+    .portal-balance__track { display: flex; height: 8px; overflow: hidden;
+        border-radius: 99px; background: #e2e8f0; }
+    .portal-balance__segment--wip { background: #d97706; }
+    .portal-balance__segment--fg { background: #0f766e; }
+    .st-key-delivery_reschedule { margin: 12px 0 24px; }
+    .st-key-delivery_reschedule [data-testid="stForm"] { background: #f8fafc;
+        border: 1px solid #e2e8f0; border-radius: 14px; padding: 20px; }
+    .st-key-delivery_reschedule [data-testid="stForm"] label p { font-size: 14px; color: #334155; }
+    .st-key-delivery_reschedule [data-testid="stFormSubmitButton"] button {
+        background: #1d4ed8; color: #fff; border: 1px solid #1d4ed8;
+        border-radius: 10px; min-height: 44px; font-weight: 650; }
+    .st-key-delivery_reschedule [data-testid="stFormSubmitButton"] button:hover { background: #1e40af; border-color: #1e40af; }
+    .portal-day { --day-accent: #0f766e; --day-tint: #f0fdfa; --day-line: #99f6e4;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 18px; padding: 20px; margin-bottom: 12px;
+        border-left: 4px solid var(--day-accent); border-radius: 12px;
+        background: linear-gradient(110deg, var(--day-tint), #fff 75%); }
+    .portal-day--overdue { --day-accent: #be123c; --day-tint: #fff1f2; --day-line: #fecdd3; }
+    .portal-day--today { --day-accent: #b45309; --day-tint: #fffbeb; --day-line: #fde68a; }
+    .portal-day--soon { --day-accent: #1d4ed8; --day-tint: #eff6ff; --day-line: #bfdbfe; }
+    .portal-day--pending { --day-accent: #475569; --day-tint: #f8fafc; --day-line: #cbd5e1; }
+    .portal-day__main { min-width: 0; }
+    .portal-day__eyebrow { color: var(--day-accent); font-size: 11px; font-weight: 750;
+        letter-spacing: .09em; margin-bottom: 6px; }
+    .portal-day__title { color: #0f172a; font-size: 21px; line-height: 1.5; font-weight: 750; }
+    .portal-day__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+        color: #64748b; font-size: 13px; line-height: 1.7; margin-top: 10px; }
+    .portal-day__badge { display: inline-block; padding: 4px 10px; border-radius: 99px;
+        margin-top: 0; color: var(--day-accent); background: var(--day-tint);
+        border: 1px solid var(--day-line); font-size: 12px; font-weight: 650; }
+    .portal-day-volume { min-width: 180px; padding: 12px 18px; background: #fff;
+        border: 1px solid var(--day-line); border-radius: 12px; }
+    .portal-day-volume__label { color: #475569; font-size: 12px; margin-bottom: 4px; }
+    .portal-day-volume__value { color: var(--day-accent); font-size: 28px;
+        font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1.4; }
+    .st-key-delivery_list [data-testid="stDataFrame"],
+    .st-key-stock_details_wip [data-testid="stDataFrame"],
+    .st-key-stock_details_fg [data-testid="stDataFrame"] {
+        border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+    .st-key-stock_details_wip, .st-key-stock_details_fg { padding: 22px;
+        border: 1px solid #fde68a; border-top: 3px solid #d97706;
+        border-radius: 16px; background: #fff; margin-bottom: 20px; }
+    .st-key-stock_details_fg { border-color: #99f6e4; border-top-color: #0f766e; }
+    .portal-grade-grid { --grade-tint: #fffbeb; --grade-line: #fde68a; --grade-text: #92400e;
+        display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
+    .portal-grade-grid--fg { --grade-tint: #f0fdfa; --grade-line: #99f6e4; --grade-text: #115e59; }
+    .portal-grade { padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+    .portal-grade dt { margin: 0 0 6px; color: #64748b; font-size: 11px; font-weight: 700; letter-spacing: .05em; }
+    .portal-grade dd { margin: 0; color: #334155; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .portal-grade dd small { font-size: 11px; font-weight: 500; }
+    .portal-grade--total { background: var(--grade-tint); border-color: var(--grade-line); }
+    .portal-grade--total dt, .portal-grade--total dd { color: var(--grade-text); }
+    .portal-empty { color: #64748b; background: #f8fafc; border: 1px dashed #cbd5e1;
+        padding: 28px 20px; border-radius: 12px; text-align: center; font-size: 14px; line-height: 1.7; }
+    @media (max-width: 760px) {
+        .portal-grade-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .portal-grade--total { grid-column: 1 / -1; }
+        .portal-day { align-items: stretch; flex-direction: column; gap: 14px; padding: 16px; }
+        .portal-day__title { font-size: 19px; }
+        .portal-day-volume { display: flex; align-items: center; justify-content: space-between;
+            flex-wrap: wrap; gap: 8px; min-width: 0; padding: 10px 14px; }
+        .portal-day-volume__label { margin: 0; }
+        .portal-day-volume__value { font-size: 25px; }
+    }
+    @media (max-width: 640px) {
+        .st-key-delivery_overview [data-testid="stHorizontalBlock"],
+        .st-key-stock_overview [data-testid="stHorizontalBlock"] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .st-key-stock_overview [data-testid="stColumn"]:first-child { grid-column: 1 / -1; }
+        .st-key-delivery_overview [data-testid="stMetric"],
+        .st-key-stock_overview [data-testid="stMetric"] { padding: 14px; }
+        .st-key-delivery_overview [data-testid="stMetricValue"],
+        .st-key-stock_overview [data-testid="stMetricValue"] { font-size: 21px; }
+        .st-key-delivery_overview [data-testid="stMetricLabel"],
+        .st-key-stock_overview [data-testid="stMetricLabel"] { height: auto; min-height: 40px; }
+        .st-key-stock_overview [data-testid="stColumn"]:first-child [data-testid="stMetricValue"] { font-size: 28px; }
+        .st-key-stock_details_wip, .st-key-stock_details_fg { padding: 16px; }
+        .portal-section h2 { font-size: 19px; }
+        .portal-section p { font-size: 13px; }
+        .portal-balance { padding: 14px; }
+    }
+    </style>""", unsafe_allow_html=True)
+
 def render_section_heading(title, description, eyebrow="", tone="blue"):
+    if tone not in {"blue", "slate", "amber", "teal"}:
+        tone = "blue"
     st.markdown(
-        f'<div style="margin-bottom: 15px;"><span style="color: #64748b; font-size: 12px; font-weight: bold; letter-spacing: 1px;">{eyebrow}</span>'
-        f'<h3 style="margin: 0; padding: 0; color: #1e293b;">{title}</h3>'
-        f'<p style="margin: 0; color: #64748b; font-size: 14px;">{description}</p></div>',
+        f'<header class="portal-section portal-section--{tone}">'
+        f'<div class="portal-section__eyebrow">{escape(eyebrow)}</div>'
+        f'<h2>{escape(title)}</h2><p>{escape(description)}</p></header>',
         unsafe_allow_html=True,
     )
 
 def render_grade_summary(stock_df, total, stock_type):
     grade_names = stock_df["Grade"].astype(str).str.strip().str.upper()
-    items = [(grade, stock_df.loc[grade_names.eq(grade), "Clean_Qty"].sum()) for grade in ("BIG", "SMALL", "MIX", "F")]
+    items = [(grade, stock_df.loc[grade_names.eq(grade), "Clean_Qty"].sum())
+             for grade in ("BIG", "SMALL", "MIX", "F")]
     items.append((f"รวม {stock_type}", total))
-    html = ['<div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">']
-    for label, quantity in items:
-        html.append(f'<div style="padding: 10px 15px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc;"><div style="font-size: 12px; color: #64748b; font-weight: bold;">{escape(label)}</div><div style="font-size: 18px; font-weight: bold; color: #334155;">{quantity:,.2f} g</div></div>')
-    html.append('</div>')
+    html = [f'<dl class="portal-grade-grid portal-grade-grid--{stock_type.lower()}">']
+    for index, (label, quantity) in enumerate(items):
+        total_class = " portal-grade--total" if index == len(items) - 1 else ""
+        html.append(
+            f'<div class="portal-grade{total_class}"><dt>{escape(label)}</dt>'
+            f'<dd>{quantity:,.2f} <small>g</small></dd></div>'
+        )
+    html.append('</dl>')
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
@@ -204,53 +366,74 @@ def render_grade_summary(stock_df, total, stock_type):
 # ==========================================
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
+# ✨ เปลี่ยนหน้าแรกเป็น Delivery & Picking Request แบบใหม่
 menu = st.sidebar.radio(
     "เลือกเมนูการใช้งาน",
     ["🚚 Delivery & Picking Request", "📊 Stock Summary & Details", "📈 Monthly Report", "📝 Trading Goods Registration", "✏️ Edit Registration", "🔧 Adjustment Module", "📦 Packing Module", "🚚 Shipped Out Module"],
 )
 st.sidebar.markdown("---")
+st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing (Pastel Theme)")
 
 
 # ==========================================
-# หน้าที่ 1: Delivery & Picking Request
+# หน้าที่ 1: Delivery & Picking Request (ใหม่)
 # ==========================================
 if menu == "🚚 Delivery & Picking Request":
-    st.title("🚚 Delivery & Picking Request")
-    st.caption("ระบบจัดการใบเบิกสินค้า (Picking Request) และติดตามกำหนดการจัดส่ง")
+    render_portal_ui_styles()
+    with st.container(key="delivery_header"):
+        col_head1, col_head2 = st.columns([4, 1])
+        with col_head1:
+            st.title("🚚 Delivery & Picking Request")
+            st.caption("ระบบจัดการใบเบิกสินค้า (Picking Request) และติดตามกำหนดการจัดส่ง")
+        with col_head2:
+            with st.expander("🔗 เปิด Google Sheets"):
+                pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del")
+                if pwd == "tstd": st.markdown("[🟢 **เปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
 
     tab_dash, tab_create, tab_legacy = st.tabs([
         "📋 1. Active Delivery Dashboard", 
-        "📝 2. สร้าง Picking Request", 
-        "🗄️ 3. Legacy Delivery Schedule"
+        "📝 2. สร้าง Picking Request (ใหม่)", 
+        "🗄️ 3. Legacy Delivery Schedule (ข้อมูลเก่า)"
     ])
 
+    # ------------------------------------------
+    # Tab 1: Active Delivery Dashboard
+    # ------------------------------------------
     with tab_dash:
-        st.subheader("📋 สถานะใบเบิกสินค้าและการจัดส่ง (Active Requests)")
+        render_section_heading("สถานะใบเบิกสินค้าและการจัดส่ง", "ติดตามใบเบิกสินค้าที่ยังค้างอยู่ (Active) แยกตามวันที่กำหนดส่ง", eyebrow="ACTIVE REQUESTS")
         pr_data = get_cached_data("picking_request", picking_request_sheet, include_row_index=True)
         if pr_data:
             df_pr = pd.DataFrame(pr_data)
             df_pr["Clean_Qty"] = df_pr["Request Qty"].apply(clean_quantity)
             
+            # กรองเฉพาะรายการที่ยังไม่ส่งมอบสมบูรณ์
             active_df = df_pr[~df_pr["Status"].astype(str).str.contains("Delivered|จัดส่งแล้ว", case=False, na=False)].copy()
             
             if not active_df.empty:
                 active_df["Parsed_Date"] = active_df["Expected Shipment Date"].apply(parse_delivery_date)
                 active_df = active_df.sort_values(by="Parsed_Date", na_position="last")
                 
-                col1, col2, col3 = st.columns(3)
-                with col1: st.metric("ใบงานที่รอแพ็ก (WIP)", len(active_df[active_df["Status"].str.contains("รอแพ็ค")]))
-                with col2: st.metric("ใบงานพร้อมส่ง (FG)", len(active_df[active_df["Status"].str.contains("พร้อมส่ง")]))
-                with col3: st.metric("ปริมาณรอส่งรวม (g)", f"{active_df['Clean_Qty'].sum():,.2f}")
-                
-                st.dataframe(format_df_quantity(active_df.drop(columns=["Original_Row_Index", "Parsed_Date", "Clean_Qty"], errors='ignore')), use_container_width=True)
+                with st.container(key="delivery_overview"):
+                    summary_cols = st.columns(4)
+                    with summary_cols[0]: st.metric("รายการค้างส่งทั้งหมด", f"{len(active_df):,}")
+                    with summary_cols[1]: st.metric("ปริมาณรอส่งรวม (g)", f"{active_df['Clean_Qty'].sum():,.2f}")
+                    with summary_cols[2]: st.metric("ใบงานพร้อมส่ง (FG)", len(active_df[active_df["Status"].str.contains("พร้อมส่ง")]))
+                    with summary_cols[3]: st.metric("ใบงานที่รอแพ็ก (WIP)", len(active_df[active_df["Status"].str.contains("รอแพ็ค")]))
+
+                st.dataframe(
+                    format_df_quantity(active_df.drop(columns=["Original_Row_Index", "Parsed_Date", "Clean_Qty"], errors='ignore')),
+                    use_container_width=True, hide_index=True
+                )
             else:
-                st.info("ไม่มีรายการจัดส่งที่ค้างอยู่ (Active) ในขณะนี้")
+                st.info("✅ ไม่มีรายการจัดส่งที่ค้างอยู่ (Active) ในขณะนี้")
         else:
             st.info("ยังไม่มีข้อมูล Picking Request ในระบบ")
 
+    # ------------------------------------------
+    # Tab 2: สร้าง Picking Request
+    # ------------------------------------------
     with tab_create:
-        st.subheader("📝 สร้างใบเบิกสินค้า (Create Picking Request)")
-        st.markdown("ดึงรายการสต็อกคงเหลือ (WIP/FG) มากะบุเป้าหมายการแพ็ก/จัดส่ง โดยสต็อกจริงจะยังไม่ถูกหักจนกว่าจะทำ Packing หรือ Shipped Out")
+        render_section_heading("สร้างใบเบิกสินค้า (Create Picking Request)", "ดึงรายการสต็อกคงเหลือ (WIP/FG) มาระบุเป้าหมายการแพ็ก/จัดส่ง โดยสต็อกจริงจะยังไม่ถูกหักจนกว่าจะทำ Packing หรือ Shipped Out", eyebrow="NEW REQUEST")
         
         data_main = get_cached_data("main", sheet)
         df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
@@ -326,28 +509,33 @@ if menu == "🚚 Delivery & Picking Request":
                             picking_request_sheet.append_rows(rows_to_insert, value_input_option='USER_ENTERED')
                             get_cached_data.clear()
                             st.success(f"✅ สร้าง Picking Request สำเร็จ {len(rows_to_insert)} รายการ!")
-                            time.sleep(1)
+                            time.sleep(1.5)
                             st.rerun()
                         else:
                             st.warning("⚠️ กรุณาระบุจำนวนที่ต้องการเบิก (Request Qty) ให้มากกว่า 0")
 
+    # ------------------------------------------
+    # Tab 3: Legacy Delivery Schedule
+    # ------------------------------------------
     with tab_legacy:
-        st.subheader("🗄️ ข้อมูลจากชีต Delivery_schedule เดิม")
+        render_section_heading("ข้อมูล Delivery Schedule เดิม", "สำหรับอ้างอิงข้อมูลเก่าจากแท็บ Delivery_schedule", eyebrow="LEGACY DATA", tone="slate")
         try:
             del_sheet = sh.worksheet("Delivery_schedule")
             data_del = get_cached_data("delivery", del_sheet, include_row_index=True)
             df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
-            if not df_del.empty: st.dataframe(format_df_quantity(df_del.drop(columns=["Original_Row_Index"], errors='ignore')), use_container_width=True)
+            if not df_del.empty: st.dataframe(format_df_quantity(df_del.drop(columns=["Original_Row_Index"], errors='ignore')), use_container_width=True, hide_index=True)
             else: st.info("ไม่มีข้อมูลในชีตนี้")
         except: st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule'")
 
 
 # ==========================================
-# หน้าที่ 2: Stock Summary & Details
+# หน้าที่ 2: Stock Summary & Details (โค้ดดั้งเดิมของคุณทั้งหมด)
 # ==========================================
 elif menu == "📊 Stock Summary & Details":
-    st.title("Stock Summary & Details")
-    st.caption("ติดตามสต็อกคงเหลือ สัดส่วน WIP / FG และรายละเอียดสินค้าแต่ละ Lot")
+    render_portal_ui_styles()
+    with st.container(key="stock_header"):
+        st.title("Stock Summary & Details")
+        st.caption("ติดตามสต็อกคงเหลือ สัดส่วน WIP / FG และรายละเอียดสินค้าแต่ละ Lot")
 
     data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
@@ -380,73 +568,412 @@ elif menu == "📊 Stock Summary & Details":
             filtered_df = filtered_df[~filtered_df["Status"].astype(str).str.strip().str.lower().eq("delivered")]
         filtered_df = filtered_df[filtered_df["Clean_Qty"] > 0]
 
-        wip_stock_df = filtered_df[filtered_df["Category"].astype(str).str.contains("WIP", case=False, na=False)] if "Category" in filtered_df.columns else pd.DataFrame()
-        fg_stock_df = filtered_df[filtered_df["Category"].astype(str).str.contains("FG", case=False, na=False)] if "Category" in filtered_df.columns else pd.DataFrame()
+        if "Category" in filtered_df.columns:
+            wip_stock_df = filtered_df[filtered_df["Category"].astype(str).str.contains("WIP", case=False, na=False)]
+            fg_stock_df = filtered_df[filtered_df["Category"].astype(str).str.contains("FG", case=False, na=False)]
+        else:
+            wip_stock_df = pd.DataFrame(); fg_stock_df = pd.DataFrame()
 
         total_wip = wip_stock_df["Clean_Qty"].sum()
         total_fg = fg_stock_df["Clean_Qty"].sum()
         total_on_hand = total_wip + total_fg
 
-        render_section_heading("ภาพรวมสต็อกคงเหลือ", "ยอดคงเหลือจากสินค้าในคลังและรายการ Packing", eyebrow="ON-HAND STOCK", tone="slate")
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1: st.metric("สต็อกคงเหลือทั้งหมด", f"{total_on_hand:,.2f} g")
-        with col_m2: st.metric("งานระหว่างกระบวนการ · WIP", f"{total_wip:,.2f} g")
-        with col_m3: st.metric("สินค้าสำเร็จรูป · FG", f"{total_fg:,.2f} g")
+        render_section_heading(
+            "ภาพรวมสต็อกคงเหลือ", "ยอดคงเหลือจากสินค้าในคลังและรายการ Packing รวมเฉพาะสินค้าที่ยังมีสต็อก",
+            eyebrow="ON-HAND STOCK", tone="slate",
+        )
+        with st.container(key="stock_overview"):
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                st.metric("สต็อกคงเหลือทั้งหมด", f"{total_on_hand:,.2f} g")
+            with col_m2:
+                st.metric("งานระหว่างกระบวนการ · WIP", f"{total_wip:,.2f} g")
+            with col_m3:
+                st.metric("สินค้าสำเร็จรูป · FG", f"{total_fg:,.2f} g")
+
+        wip_share = float(total_wip / total_on_hand * 100) if total_on_hand else 0.0
+        fg_share = float(total_fg / total_on_hand * 100) if total_on_hand else 0.0
+        st.markdown(
+            '<div class="portal-balance"><div class="portal-balance__labels">'
+            f'<strong class="portal-balance__wip">WIP · {wip_share:.1f}%</strong>'
+            f'<strong class="portal-balance__fg">FG · {fg_share:.1f}%</strong></div>'
+            f'<div class="portal-balance__track" role="img" aria-label="สัดส่วนสต็อก WIP {wip_share:.1f}% และ FG {fg_share:.1f}%">'
+            f'<div class="portal-balance__segment--wip" style="width: {wip_share:.4f}%"></div>'
+            f'<div class="portal-balance__segment--fg" style="width: {fg_share:.4f}%"></div>'
+            '</div></div>', unsafe_allow_html=True,
+        )
+
+        st.markdown("""<style>
+        .stock-matrix { --accent: #b45309; --deep: #92400e; --tint: #fffbeb;
+            --soft: #fef3c7; --line: #fde68a; --rgb: 217, 119, 6;
+            margin: 8px 0 28px; overflow: hidden; border: 1px solid var(--line);
+            border-top: 4px solid var(--accent); border-radius: 18px;
+            background: #fff; color: #1e293b; box-shadow: 0 6px 24px #0f172a06; }
+        .stock-matrix--fg { --accent: #0f766e; --deep: #115e59; --tint: #f0fdfa;
+            --soft: #ccfbf1; --line: #99f6e4; --rgb: 13, 148, 136; }
+        .stock-matrix__header { display: flex; justify-content: space-between; gap: 24px;
+            align-items: center; padding: 24px; background: linear-gradient(110deg, var(--tint), #fff); }
+        .stock-matrix__badge { display: inline-block; padding: 5px 10px; border-radius: 6px;
+            background: var(--soft); color: var(--deep); font-size: 11px;
+            font-weight: 750; letter-spacing: .07em; }
+        .stock-matrix h3 { margin: 10px 0 5px; padding: 0; color: #0f172a;
+            font-size: 23px; font-weight: 750; line-height: 1.4; }
+        .stock-matrix__description { margin: 0; color: #64748b; font-size: 13px; line-height: 1.7; }
+        .stock-matrix__summary { flex-shrink: 0; text-align: right; }
+        .stock-matrix__label { color: #475569; font-size: 12px; }
+        .stock-matrix__quantity { color: var(--deep); font-size: 32px; font-weight: 800;
+            line-height: 1.45; font-variant-numeric: tabular-nums; }
+        .stock-matrix__quantity small { font-size: 14px; font-weight: 500; }
+        .stock-matrix__counts { color: #64748b; font-size: 12px; }
+        .stock-matrix__scroll { position: relative; overflow: auto; max-height: 480px;
+            border-top: 1px solid var(--line); scrollbar-color: var(--accent) var(--tint); }
+        .stock-matrix__scroll:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+        .stock-matrix table { width: 100%; border-collapse: separate; border-spacing: 0;
+            margin: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+        .stock-matrix th, .stock-matrix td { padding: 14px 18px; border: 0;
+            border-right: 1px solid #f1f5f9; border-bottom: 1px solid #e2e8f0; }
+        .stock-matrix thead th { position: sticky; top: 0; z-index: 2;
+            min-width: 145px; max-width: 220px; background: var(--tint);
+            color: var(--deep); text-align: center; font-size: 12px;
+            font-weight: 700; overflow-wrap: anywhere; }
+        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 20px; line-height: 1.5; }
+        .stock-matrix th:first-child { position: sticky; left: 0; z-index: 1;
+            min-width: 125px; background: #fff; color: #475569;
+            text-align: left; white-space: nowrap; box-shadow: 3px 0 8px #0f172a05; }
+        .stock-matrix thead th:first-child { z-index: 3; background: var(--tint); color: var(--deep); }
+        .stock-matrix td { text-align: right; white-space: nowrap; color: #334155; }
+        .stock-matrix td.stock-matrix__value { color: var(--deep); font-weight: 600; }
+        .stock-matrix td.stock-matrix__zero { color: #64748b; }
+        .stock-matrix .stock-matrix__row-total { background: var(--tint);
+            color: var(--deep); font-weight: 750; }
+        .stock-matrix tbody tr:hover td, .stock-matrix tbody tr:hover th { box-shadow: inset 0 0 0 999px #0f172a06; }
+        .stock-matrix tfoot th, .stock-matrix tfoot td { border-bottom: 0;
+            border-top: 2px solid var(--line); background: var(--soft); color: var(--deep); font-weight: 750; }
+        .stock-matrix tfoot th:first-child { background: var(--soft); color: var(--deep); }
+        .stock-matrix tfoot td:last-child { background: var(--accent); color: #fff; }
+        .stock-matrix__footer { display: flex; justify-content: space-between; flex-wrap: wrap;
+            gap: 8px 20px; padding: 12px 20px; background: #f8fafc;
+            border-top: 1px solid #e2e8f0; color: #64748b; font-size: 11px; line-height: 1.7; }
+        .stock-matrix__legend { display: inline-flex; align-items: center; gap: 7px; }
+        .stock-matrix__swatch { width: 36px; height: 8px; border-radius: 4px;
+            background: linear-gradient(90deg, rgba(var(--rgb), .04), rgba(var(--rgb), .24)); }
+        .stock-matrix__empty { padding: 30px 24px; border-top: 1px solid var(--line);
+            color: #64748b; text-align: center; font-size: 14px; }
+        .stock-matrix__sr-only { position: absolute; width: 1px; height: 1px;
+            padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+        @media (max-width: 640px) {
+            .stock-matrix__header { align-items: flex-start; flex-direction: column; gap: 16px; padding: 18px; }
+            .stock-matrix__summary { text-align: left; }
+            .stock-matrix h3 { font-size: 21px; }
+            .stock-matrix__quantity { font-size: 28px; }
+            .stock-matrix th, .stock-matrix td { padding: 12px 14px; }
+            .stock-matrix th:first-child { min-width: 110px; }
+            .stock-matrix__footer { padding: 12px 16px; }
+        }
+        </style>""", unsafe_allow_html=True)
+
+        def render_matrix_table(target_df, stock_type):
+            is_wip = stock_type == "WIP"
+            theme = "wip" if is_wip else "fg"
+            category_name = "WORK IN PROGRESS" if is_wip else "FINISHED GOODS"
+            description = "สต็อกงานระหว่างกระบวนการ" if is_wip else "สต็อกสินค้าสำเร็จรูป"
+            pivot_df = pd.DataFrame()
+            active_grades = 0
+
+            if not target_df.empty:
+                matrix_data = target_df.copy()
+                matrix_data["Cultivar Name"] = matrix_data["Cultivar Name"].fillna("").astype(str).str.strip().replace("", "ไม่ระบุชื่อสายพันธุ์")
+                matrix_data["Grade"] = matrix_data["Grade"].fillna("").astype(str).str.strip().str.upper().replace("", "GENERAL")
+                pivot_df = matrix_data.pivot_table(
+                    index="Grade", columns="Cultivar Name", values="Clean_Qty",
+                    aggfunc="sum", fill_value=0.0,
+                )
+                active_grades = len(pivot_df.index)
+                standard_sizes = ["BIG", "SMALL", "MIX", "F"]
+                other_sizes = [grade for grade in pivot_df.index if grade not in standard_sizes]
+                pivot_df = pivot_df.reindex(standard_sizes + other_sizes, fill_value=0.0)
+
+            section_total = float(pivot_df.to_numpy().sum()) if not pivot_df.empty else 0.0
+            cultivar_count = len(pivot_df.columns)
+            html = [
+                f'<section class="stock-matrix stock-matrix--{theme}" aria-labelledby="matrix-{theme}-title">',
+                '<header class="stock-matrix__header"><div>',
+                f'<span class="stock-matrix__badge">{stock_type} · {category_name}</span>',
+                f'<h3 id="matrix-{theme}-title">{stock_type} Matrix Summary</h3>',
+                f'<p class="stock-matrix__description">{description} แยกตามสายพันธุ์และขนาด / เกรด</p></div>',
+                f'<div class="stock-matrix__summary"><div class="stock-matrix__label">ยอดคงเหลือ {stock_type}</div>',
+                f'<div class="stock-matrix__quantity">{section_total:,.2f} <small>g</small></div>',
+                f'<div class="stock-matrix__counts">{cultivar_count:,} สายพันธุ์ &nbsp;·&nbsp; {active_grades:,} เกรดที่มีสต็อก</div></div></header>',
+            ]
+            if pivot_df.empty:
+                html.append(f'<div class="stock-matrix__empty">ยังไม่มีสต็อก {stock_type} คงเหลือในขณะนี้</div></section>')
+                st.markdown("".join(html), unsafe_allow_html=True)
+                return
+
+            html.extend([
+                f'<div class="stock-matrix__scroll" role="region" tabindex="0" aria-label="ตารางสต็อก {stock_type} เลื่อนเพื่อดูสายพันธุ์ทั้งหมด">',
+                f'<table><caption class="stock-matrix__sr-only">ปริมาณสต็อก {stock_type} แยกตามเกรดและสายพันธุ์ หน่วยกรัม</caption>',
+                '<thead><tr><th scope="col">Size / Grade</th>',
+            ])
+            for cultivar in pivot_df.columns:
+                html.append(f'<th scope="col" class="stock-matrix__cultivar">{escape(str(cultivar))}</th>')
+            html.append('<th scope="col" class="stock-matrix__row-total">รวมตามเกรด (g)</th></tr></thead><tbody>')
+
+            max_quantity = float(pivot_df.to_numpy().max())
+            for grade, quantities in pivot_df.iterrows():
+                html.append(f'<tr><th scope="row">{escape(str(grade))}</th>')
+                for quantity in quantities:
+                    if quantity > 0:
+                        intensity = 0.04 + 0.20 * float(quantity) / max_quantity
+                        html.append(f'<td class="stock-matrix__value" style="background: rgba(var(--rgb), {intensity:.3f})">{quantity:,.2f}</td>')
+                    else:
+                        html.append('<td class="stock-matrix__zero"><span aria-hidden="true">—</span><span class="stock-matrix__sr-only">0.00</span></td>')
+                html.append(f'<td class="stock-matrix__row-total">{quantities.sum():,.2f}</td></tr>')
+
+            html.append('</tbody><tfoot><tr><th scope="row">รวมทั้งหมด</th>')
+            for quantity in pivot_df.sum(axis=0):
+                html.append(f'<td>{quantity:,.2f}</td>')
+            html.extend([
+                f'<td>{section_total:,.2f}</td></tr></tfoot></table></div>',
+                '<footer class="stock-matrix__footer">',
+                '<span class="stock-matrix__legend"><span class="stock-matrix__swatch" aria-hidden="true"></span>สีเข้ม = ปริมาณมาก เทียบภายในแต่ละตาราง</span>',
+                '<span>หน่วย: กรัม (g) &nbsp;·&nbsp; — = ไม่มีสต็อก &nbsp;·&nbsp; เลื่อนตารางเพื่อดูทุกสายพันธุ์</span>',
+                '</footer></section>',
+            ])
+            st.markdown("".join(html), unsafe_allow_html=True)
+
+        render_matrix_table(wip_stock_df, "WIP")
+        render_matrix_table(fg_stock_df, "FG")
 
         st.divider()
 
-        for stock_type, stock_df, stock_total, tone, title in (("WIP", wip_stock_df, total_wip, "amber", "รายละเอียด WIP"), ("FG", fg_stock_df, total_fg, "teal", "รายละเอียด FG")):
-            render_section_heading(title, f"สต็อกคงเหลือของ {stock_type}", eyebrow=f"{stock_type} INVENTORY", tone=tone)
-            if not stock_df.empty:
-                render_grade_summary(stock_df, stock_total, stock_type)
-                st.dataframe(format_df_quantity(stock_df), width="stretch", hide_index=True)
-            else:
-                st.info(f"ยังไม่มีรายการสินค้า {stock_type} คงเหลือในขณะนี้")
+        render_section_heading(
+            "รายละเอียดสต็อกทั้งหมด", "ตรวจสอบยอดแต่ละเกรดและรายละเอียดสินค้าแต่ละ Lot แยกตามประเภท",
+            eyebrow="STOCK DETAILS", tone="slate",
+        )
+        for stock_type, stock_df, stock_total, tone, title in (
+            ("WIP", wip_stock_df, total_wip, "amber", "รายละเอียด WIP"),
+            ("FG", fg_stock_df, total_fg, "teal", "รายละเอียด FG"),
+        ):
+            with st.container(key=f"stock_details_{stock_type.lower()}"):
+                description = "งานระหว่างกระบวนการ · Work in Progress" if stock_type == "WIP" else "สินค้าสำเร็จรูป · Finished Goods"
+                render_section_heading(title, description, eyebrow=f"{stock_type} INVENTORY", tone=tone)
+                if not stock_df.empty:
+                    render_grade_summary(stock_df, stock_total, stock_type)
+                    st.caption(f"{len(stock_df):,} รายการ · ยอดรวมทุกเกรด · เลื่อนตารางเพื่อดูรายละเอียดทั้งหมด")
+                    preferred_columns = ["Cultivar Name", "Grade", "Quantity", "THAI STICK Lot. No.", "Status", "Supplier Name"]
+                    display_columns = [column for column in preferred_columns if column in stock_df.columns]
+                    display_columns += [column for column in stock_df.columns if column not in preferred_columns and column != "Clean_Qty"]
+                    st.dataframe(
+                        format_df_quantity(stock_df), width="stretch", hide_index=True,
+                        column_order=display_columns,
+                        height=min(460, 38 * (len(stock_df) + 1) + 4), row_height=38,
+                        column_config={
+                            "Clean_Qty": None,
+                            "Cultivar Name": st.column_config.TextColumn("สายพันธุ์", width="medium"),
+                            "Grade": st.column_config.TextColumn("เกรด", width="small"),
+                            "Quantity": st.column_config.TextColumn("จำนวน (g)", width="small"),
+                            "Supplier Name": st.column_config.TextColumn("ผู้จัดหา", width="medium"),
+                            "THAI STICK Lot. No.": st.column_config.TextColumn("THAI STICK Lot No.", width="medium"),
+                        },
+                    )
+                else:
+                    st.markdown(f'<div class="portal-empty">ยังไม่มีรายการสินค้า {stock_type} คงเหลือในขณะนี้</div>', unsafe_allow_html=True)
     else:
-        st.info("ยังไม่มีข้อมูลสต็อกในระบบ")
+        st.markdown('<div class="portal-empty">ยังไม่มีข้อมูลสต็อกในระบบ เมื่อบันทึกรับสินค้าแล้ว ยอดคงเหลือจะแสดงที่หน้านี้</div>', unsafe_allow_html=True)
 
 # ==========================================
-# หน้าที่ 3: Monthly Report
+# หน้าที่ 3: Monthly Report (โค้ดดั้งเดิมของคุณ)
 # ==========================================
 elif menu == "📈 Monthly Report":
     st.title("📈 Monthly Report (รายงานสรุปผลการดำเนินงานรายเดือน)")
-    
+    st.markdown("เลือกเดือนและปีที่ต้องการตรวจสอบรายงานสต็อกเคลื่อนไหวและประวัติการส่งออก")
+
     today = date.today()
     col_y, col_m = st.columns(2)
     with col_y:
         year_options = [2026, 2025, 2024, 2023]
-        selected_year = st.selectbox("เลือกปี (Year)", year_options, index=year_options.index(today.year) if today.year in year_options else 0)
+        default_year_idx = year_options.index(today.year) if today.year in year_options else 0
+        selected_year = st.selectbox("เลือกปี (Year)", year_options, index=default_year_idx, key="rep_year")
+        
     with col_m:
-        months_dict = {"มกราคม": 1, "กุมภาพันธ์": 2, "มีนาคม": 3, "เมษายน": 4, "พฤษภาคม": 5, "มิถุนายน": 6, "กรกฎาคม": 7, "สิงหาคม": 8, "กันยายน": 9, "ตุลาคม": 10, "พฤศจิกายน": 11, "ธันวาคม": 12}
-        month_names = list(months_dict.keys())
-        selected_month_label = st.selectbox("เลือกเดือน (Month)", month_names, index=today.month - 1)
+        months_dict = {
+            "มกราคม (01)": 1, "กุมภาพันธ์ (02)": 2, "มีนาคม (03)": 3, "เมษายน (04)": 4,
+            "พฤษภาคม (05)": 5, "มิถุนายน (06)": 6, "กรกฎาคม (07)": 7, "สิงหาคม (08)": 8,
+            "กันยายน (09)": 9, "ตุลาคม (10)": 10, "พฤศจิกายน (11)": 11, "ธันวาคม (12)": 12,
+        }
+        default_month_idx = today.month - 1
+        selected_month_label = st.selectbox("เลือกเดือน (Month)", list(months_dict.keys()), index=default_month_idx, key="rep_month")
         selected_month_num = months_dict[selected_month_label]
 
     st.divider()
 
+    rep_tab1, rep_tab2 = st.tabs([
+        "📊 1. Monthly On-Hand Stock Report (WIP & FG)",
+        "🚚 2. Shipped Out Report & Reasons",
+    ])
+
+    def parse_robust_date(date_val):
+        if not date_val or not str(date_val).strip(): return pd.NaT
+        d_str = str(date_val).strip()
+        try:
+            dt = pd.to_datetime(d_str, errors='coerce')
+            if pd.isna(dt): dt = pd.to_datetime(d_str, format='%d/%m/%Y', errors='coerce')
+            return dt
+        except: return pd.NaT
+
     shipped_data = get_cached_data("shipped", shipped_sheet)
     df_shipped = pd.DataFrame(shipped_data) if shipped_data else pd.DataFrame()
     if not df_shipped.empty:
-        df_shipped["Parsed_Date"] = df_shipped["Shipment Date"].apply(lambda x: pd.to_datetime(str(x), errors='coerce'))
+        df_shipped.columns = [str(c).strip() for c in df_shipped.columns]
+        df_shipped["Parsed_Date"] = df_shipped["Shipment Date"].apply(parse_robust_date)
         df_shipped["Clean_Shipped_Qty"] = df_shipped["Shipped Qty"].apply(clean_quantity)
-        monthly_shipped = df_shipped[(df_shipped["Parsed_Date"].dt.year == selected_year) & (df_shipped["Parsed_Date"].dt.month == selected_month_num)]
+        monthly_shipped = df_shipped[
+            (df_shipped["Parsed_Date"].dt.year == selected_year) & 
+            (df_shipped["Parsed_Date"].dt.month == selected_month_num)
+        ].copy()
     else:
         monthly_shipped = pd.DataFrame()
 
-    st.subheader(f"🚚 Shipped Out Report ประจำเดือน {selected_month_label} {selected_year}")
-    if not monthly_shipped.empty:
-        reason_summary = monthly_shipped.groupby("Shipping Reason")["Clean_Shipped_Qty"].sum().reset_index()
-        reason_summary.columns = ["Shipping Reason (เหตุผลการส่ง)", "Total Shipped Qty (จำนวนรวม)"]
-        st.dataframe(format_df_quantity(reason_summary), use_container_width=True)
-        st.dataframe(format_df_quantity(monthly_shipped), use_container_width=True)
-    else:
-        st.info(f"ไม่พบประวัติการส่งออกในเดือน {selected_month_label} {selected_year}")
+    with rep_tab1:
+        st.subheader(f"📅 รายงานความเคลื่อนไหวสต็อกประจำเดือน {selected_month_label} {selected_year}")
+
+        main_data = get_cached_data("main", sheet)
+        df_main_rep = pd.DataFrame(main_data) if main_data else pd.DataFrame()
+        pack_data = get_cached_data("packing", packing_records_sheet)
+        df_pack_rep = pd.DataFrame(pack_data) if pack_data else pd.DataFrame()
+
+        events = []
+        lot_addbacks = {}
+
+        if not df_shipped.empty:
+            for _, r in df_shipped.iterrows():
+                lot_no = str(r.get("Lot No.", "")).strip()
+                cat = str(r.get("Category", "")).lower()
+                qty = clean_quantity(r.get("Shipped Qty", 0))
+                s_date = str(r.get("Shipment Date", ""))
+                
+                lot_addbacks[lot_no] = lot_addbacks.get(lot_no, 0.0) + qty
+                events.append({"date": s_date, "type": "outbound", "cat": "wip" if "wip" in cat else "fg", "qty": qty})
+
+        if not df_pack_rep.empty:
+            df_pack_rep.columns = [str(c).strip() for c in df_pack_rep.columns]
+            for _, r in df_pack_rep.iterrows():
+                wip_lot = str(r.get("Source WIP Lot", "")).strip()
+                qty = clean_quantity(r.get("Quantity", 0))
+                waste = clean_quantity(r.get("Waste Qty", 0))
+                p_date = str(r.get("Packing Date", ""))
+                
+                withdraw_qty = qty + waste
+                lot_addbacks[wip_lot] = lot_addbacks.get(wip_lot, 0.0) + withdraw_qty
+                
+                events.append({"date": p_date, "type": "outbound", "cat": "wip", "qty": withdraw_qty})
+                events.append({"date": p_date, "type": "inbound", "cat": "fg", "qty": qty})
+
+        if not df_main_rep.empty:
+            df_main_rep.columns = [str(c).strip() for c in df_main_rep.columns]
+            for _, r in df_main_rep.iterrows():
+                lot_no = str(r.get("THAI STICK Lot. No.", "")).strip()
+                if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+                    
+                cat = str(r.get("Category", "")).lower()
+                curr_qty = clean_quantity(r.get("Quantity", 0))
+                rec_date = str(r.get("Receive date", r.get("Date receive", r.get("Date Receive", ""))))
+                
+                original_qty = curr_qty + lot_addbacks.get(lot_no, 0.0)
+                events.append({"date": rec_date, "type": "inbound", "cat": "wip" if "wip" in cat else "fg", "qty": original_qty})
+
+        month_start = pd.to_datetime(f"{selected_year}-{selected_month_num:02d}-01")
+        if selected_month_num == 12: month_end = pd.to_datetime(f"{selected_year+1}-01-01")
+        else: month_end = pd.to_datetime(f"{selected_year}-{selected_month_num+1:02d}-01")
+
+        wip_beginning, fg_beginning = 0.0, 0.0
+        wip_inbound, fg_inbound = 0.0, 0.0
+        wip_outbound, fg_outbound = 0.0, 0.0
+
+        for ev in events:
+            d = parse_robust_date(ev["date"])
+            if pd.isna(d): continue
+            
+            q = ev["qty"]
+            cat = ev["cat"]
+            
+            if d < month_start:
+                if ev["type"] == "inbound":
+                    if cat == "wip": wip_beginning += q
+                    else: fg_beginning += q
+                elif ev["type"] == "outbound":
+                    if cat == "wip": wip_beginning -= q
+                    else: fg_beginning -= q
+            elif month_start <= d < month_end:
+                if ev["type"] == "inbound":
+                    if cat == "wip": wip_inbound += q
+                    else: fg_inbound += q
+                elif ev["type"] == "outbound":
+                    if cat == "wip": wip_outbound += q
+                    else: fg_outbound += q
+
+        wip_beginning = max(0.0, wip_beginning)
+        fg_beginning = max(0.0, fg_beginning)
+        wip_ending = max(0.0, wip_beginning + wip_inbound - wip_outbound)
+        fg_ending = max(0.0, fg_beginning + fg_inbound - fg_outbound)
+
+        has_wip_activity = (wip_inbound > 0) or (wip_outbound > 0) or (wip_beginning > 0)
+        has_fg_activity = (fg_inbound > 0) or (fg_outbound > 0) or (fg_beginning > 0)
+
+        if not has_wip_activity: st.warning(f"⚠️ **WIP:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
+        if not has_fg_activity: st.warning(f"⚠️ **FG:** ไม่มียอดยกมาและไม่มีกิจกรรมในเดือน {selected_month_label} {selected_year}")
+
+        summary_report_data = [
+            {
+                "Category": "WIP (Work in Progress)",
+                "Status Activity": "🟢 Active" if (wip_inbound > 0 or wip_outbound > 0) else "⚪ No Activity (นิ่ง)",
+                "Beginning Stock (ยอดยกมา)": wip_beginning,
+                "Received / Inbound": wip_inbound,
+                "Shipped / Packed (Outbound)": wip_outbound,
+                "Ending On-Hand (คงเหลือสิ้นเดือน)": wip_ending,
+            },
+            {
+                "Category": "FG (Finished Goods)",
+                "Status Activity": "🟢 Active" if (fg_inbound > 0 or fg_outbound > 0) else "⚪ No Activity (นิ่ง)",
+                "Beginning Stock (ยอดยกมา)": fg_beginning,
+                "Received / Inbound": fg_inbound,
+                "Shipped / Packed (Outbound)": fg_outbound,
+                "Ending On-Hand (คงเหลือสิ้นเดือน)": fg_ending,
+            },
+        ]
+        
+        df_summary_rep = pd.DataFrame(summary_report_data)
+        st.markdown("")
+        st.dataframe(format_df_quantity(df_summary_rep), use_container_width=True)
+
+    with rep_tab2:
+        st.subheader(f"🚚 Shipped Out Report ประจำเดือน {selected_month_label} {selected_year}")
+        if not monthly_shipped.empty:
+            reason_summary = monthly_shipped.groupby("Shipping Reason")["Clean_Shipped_Qty"].sum().reset_index()
+            reason_summary.columns = ["Shipping Reason (เหตุผลการส่ง)", "Total Shipped Qty (จำนวนรวม)"]
+            st.markdown("##### 📌 สรุปยอดจัดส่งแยกตามเหตุผล")
+            st.dataframe(format_df_quantity(reason_summary), use_container_width=True)
+            st.markdown("##### 📋 รายละเอียดรายการส่งออกทั้งหมด")
+            st.dataframe(format_df_quantity(monthly_shipped), use_container_width=True)
+        else:
+            st.info(f"ℹ️ ไม่พบประวัติการส่งออกในเดือน {selected_month_label} {selected_year}")
 
 # ==========================================
-# หน้าที่ 4: Trading Goods Registration
+# หน้าที่ 4: Trading Goods Registration (โค้ดดั้งเดิมของคุณ)
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
-    st.title("📝 Trading Goods Registration")
+    col_head1, col_head2 = st.columns([7, 3])
+    with col_head1:
+        st.title("📝 Trading Goods Registration")
+        st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
+    with col_head2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        with st.expander("🔗 Direct Google Sheets (Multiple Batch)"):
+            pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd", placeholder="กรอกรหัสผ่าน")
+            if pwd == "tstd": st.markdown("[🟢 **คลิกเพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit?gid=0#gid=0)")
+            elif pwd != "": st.error("รหัสผ่านไม่ถูกต้อง ❌")
+
     with st.form("trading_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -458,16 +985,43 @@ elif menu == "📝 Trading Goods Registration":
             category = st.selectbox("6. Category", ["FG (Finished Goods)", "WIP (Work in Progress)"])
             grade = st.selectbox("7. Grade", ["Big", "Small", "Mix", "F", "Grade A", "Premium"])
         with col2:
-            receive_date_str = str(st.date_input("8. Receive date", value=date.today()))
+            receive_date_str = str(st.date_input("8. Receive date", value=date.today(), key="reg_rec_dt"))
             quantity = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1)
-            remark_qty = st.text_input("Remark Qty")
-            inspection_req = st.selectbox("10. Inspection Req.", ["Yes", "No", "To be decided"])
-            ir_req = st.selectbox("11. IR Req.", ["Yes", "No", "To be decided"])
-            shipment_date = str(st.date_input("12. Shipment date", value=date.today()))
-            prod_type = st.selectbox("13. Type", ["Trading Goods (TS)", "Inspection & Packing Service", "Consignment", "In House Product"])
-            status = st.selectbox("14. Status", ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"])
+            remark_qty = st.text_input("Remark Qty (เช่น 5x1000)", placeholder="ระบุรายละเอียดจำนวนถุง/แพ็ก")
+
+            insp_con = st.container()
+            is_tbd_insp = st.checkbox("To be decided", key="reg_tbd_insp")
+            inspection_req_val = insp_con.selectbox("10. Inspection Req.", ["Yes", "No"], disabled=is_tbd_insp, key="reg_insp")
+            inspection_req = "To be decided" if is_tbd_insp else inspection_req_val
+
+            ir_con = st.container()
+            is_tbd_ir = st.checkbox("To be decided", key="reg_tbd_ir")
+            ir_req_val = ir_con.selectbox("11. IR Req.", ["Yes", "No"], disabled=is_tbd_ir, key="reg_ir")
+            ir_req = "To be decided" if is_tbd_ir else ir_req_val
+
+            ship_con = st.container()
+            is_tbd_ship = st.checkbox("To be decided", key="reg_tbd_ship")
+            shipment_date_val = ship_con.date_input("12. Shipment date", value=date.today(), disabled=is_tbd_ship, key="reg_ship")
+            shipment_date = "To be decided" if is_tbd_ship else str(shipment_date_val)
+
+            type_con = st.container()
+            is_tbd_type = st.checkbox("To be decided", key="reg_tbd_type")
+            type_opts = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product"]
+            prod_type_val = type_con.selectbox("13. Type", type_opts, disabled=is_tbd_type, key="reg_type")
+            prod_type = "To be decided" if is_tbd_type else prod_type_val
+
+            status = st.selectbox(
+                "14. Status",
+                ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"],
+            )
         
-        if st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets"):
+        submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
+        if submitted:
+            latest_headers = [
+                "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
+                "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
+                "Shipment date", "Type", "Status", "Packing date"
+            ]
             row_dict = {
                 "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
                 "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
@@ -475,273 +1029,613 @@ elif menu == "📝 Trading Goods Registration":
                 "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
                 "Type": prod_type, "Status": status, "Packing date": "",
             }
-            latest_headers = [str(header).strip() for header in sheet.row_values(1)]
             row_to_insert = [row_dict.get(h, "") for h in latest_headers]
+            
             sheet.append_row(values=row_to_insert, value_input_option='USER_ENTERED')
             get_cached_data.clear()
+            
+            keys_to_clear = ["reg_tbd_insp", "reg_insp", "reg_tbd_ir", "reg_ir", "reg_tbd_ship", "reg_ship", "reg_tbd_type", "reg_type", "reg_rec_dt"]
+            for k in keys_to_clear:
+                if k in st.session_state:
+                    del st.session_state[k]
+                    
             st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
             time.sleep(1)
             st.rerun()
 
 # ==========================================
-# หน้าที่ 5: Edit Registration
+# หน้าที่ 5: Edit Registration (โค้ดดั้งเดิมของคุณ)
 # ==========================================
 elif menu == "✏️ Edit Registration":
     st.title("✏️ Edit Registration Data")
-    data = get_cached_data("main", sheet, include_row_index=True)
+    st.markdown("ค้นหาและแก้ไขข้อมูลล็อตสินค้าที่เคยบันทึกไว้")
+
+    data = get_cached_data("main", sheet)
     if data:
         df_all = pd.DataFrame(data)
+        df_all.columns = [str(c).strip() for c in df_all.columns]
+        lot_column = "THAI STICK Lot. No." if "THAI STICK Lot. No." in df_all.columns else df_all.columns[4]
+
         df_all["Clean_Qty"] = df_all["Quantity"].apply(clean_quantity) if "Quantity" in df_all.columns else 0.0
-        editable_df = df_all[(df_all["Clean_Qty"] > 0) & (~df_all["Status"].astype(str).str.strip().str.lower().eq("delivered"))].copy()
+        df_all["Original_Row_Index"] = df_all.index + 2
+
+        if "Status" in df_all.columns:
+            editable_df = df_all[(df_all["Clean_Qty"] > 0) & (~df_all["Status"].astype(str).str.strip().str.lower().eq("delivered"))].copy()
+        else:
+            editable_df = df_all[df_all["Clean_Qty"] > 0].copy()
 
         if editable_df.empty:
-            st.info("ไม่มีล็อตสินค้าที่สามารถแก้ไขได้ในขณะนี้")
+            st.info("ℹ️ ไม่มีล็อตสินค้าที่สามารถแก้ไขได้ในขณะนี้")
         else:
             edit_options = []
             edit_map = {}
-            for _, r in editable_df.iterrows():
-                lot_no = str(r.get("THAI STICK Lot. No.", "")) or str(r.get("Supplier Lot. No.", ""))
-                disp = f"Lot: {lot_no} | Size: {r.get('Grade','')} | {r.get('Cultivar Name','')} | Qty: {r['Clean_Qty']:,.2f}"
-                edit_options.append(disp)
-                edit_map[disp] = {"row_idx": r["Original_Row_Index"], "lot_no": lot_no, "data": r}
 
-            selected_disp = st.selectbox("🔍 เลือกข้อมูลที่ต้องการแก้ไข", edit_options)
+            for _, r in editable_df.iterrows():
+                lot_no = str(r.get(lot_column, "")).strip()
+                if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+                
+                cultivar = str(r.get("Cultivar Name", ""))
+                grade = str(r.get("Grade", ""))
+                qty = float(r["Clean_Qty"])
+                row_idx = r["Original_Row_Index"]
+                df_idx = r.name
+                
+                disp = f"Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
+                edit_options.append(disp)
+                edit_map[disp] = {"row_idx": row_idx, "lot_no": lot_no, "df_index": df_idx}
+
+            selected_disp = st.selectbox("🔍 เลือกข้อมูลที่ต้องการแก้ไข (Lot No. & Size)", edit_options)
 
             if selected_disp:
-                matched_row_idx = edit_map[selected_disp]["row_idx"]
-                current_data = edit_map[selected_disp]["data"]
+                selected_info = edit_map[selected_disp]
+                matched_row_idx = selected_info["row_idx"]
+                selected_lot = selected_info["lot_no"]
+                current_data = df_all.iloc[selected_info["df_index"]]
 
                 with st.form("edit_form"):
                     col1, col2 = st.columns(2)
                     with col1:
                         e_cultivar = st.text_input("1. Cultivar Name", value=str(current_data.get("Cultivar Name", "")))
                         e_supplier = st.text_input("2. Supplier Name", value=str(current_data.get("Supplier Name", "")))
+                        e_supp_lot = st.text_input("3. Supplier Lot. No.", value=str(current_data.get("Supplier Lot. No.", "")))
+                        e_export = st.text_input("4. Export Name", value=str(current_data.get("Export Name", "")))
                         e_thai_lot = st.text_input("5. THAI STICK Lot. No.", value=str(current_data.get("THAI STICK Lot. No.", "")))
-                        e_category = st.selectbox("6. Category", ["FG (Finished Goods)", "WIP (Work in Progress)"])
-                        e_grade = st.selectbox("7. Grade", ["Big", "Small", "Mix", "F", "Grade A", "Premium"])
-                    with col2:
-                        e_qty = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1, value=float(current_data.get("Clean_Qty", 0.0)))
-                        e_status = st.selectbox("14. Status", ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"])
 
-                    if st.form_submit_button("🔄 อัปเดตข้อมูล"):
-                        latest_headers = [str(header).strip() for header in sheet.row_values(1)]
-                        updated_dict = current_data.to_dict()
-                        updated_dict.update({"Cultivar Name": e_cultivar, "Supplier Name": e_supplier, "THAI STICK Lot. No.": e_thai_lot, "Category": e_category, "Grade": e_grade, "Quantity": str(e_qty), "Status": e_status})
+                        cat_opt = ["FG (Finished Goods)", "WIP (Work in Progress)"]
+                        old_cat = str(current_data.get("Category", "FG (Finished Goods)"))
+                        e_category = st.selectbox("6. Category", cat_opt, index=cat_opt.index(old_cat) if old_cat in cat_opt else 0)
+
+                        grades_opt = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
+                        old_grade = str(current_data.get("Grade", "Big"))
+                        e_grade = st.selectbox("7. Grade", grades_opt, index=grades_opt.index(old_grade) if old_grade in grades_opt else 0)
+
+                    with col2:
+                        old_rec_date = str(current_data.get("Receive date", current_data.get("Date receive", current_data.get("Date Receive", ""))))
+                        try: default_rec_dt = pd.to_datetime(old_rec_date, dayfirst=True).date() if old_rec_date and str(old_rec_date).strip() else date.today()
+                        except: default_rec_dt = date.today()
+                        e_receive_date_str = str(st.date_input("8. Receive date", value=default_rec_dt, key=f"edit_receive_date_{matched_row_idx}"))
+
+                        old_qty = float(current_data.get("Clean_Qty", 0.0))
+                        e_qty = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1, value=old_qty)
+                        e_remark_qty = st.text_input("Remark Qty", value=str(current_data.get("Remark Qty", "")), key=f"edit_remark_qty_{matched_row_idx}")
+
+                        old_insp = str(current_data.get("Inspection Req.", "No"))
+                        insp_con = st.container()
+                        e_is_tbd_insp = st.checkbox("To be decided", value=(old_insp == "To be decided"), key=f"edit_tbd_insp_{matched_row_idx}")
+                        insp_opts = ["Yes", "No"]
+                        e_insp_val = insp_con.selectbox("10. Inspection Req.", insp_opts, index=insp_opts.index(old_insp) if old_insp in insp_opts else 0, disabled=e_is_tbd_insp, key=f"edit_insp_{matched_row_idx}")
+                        e_insp = "To be decided" if e_is_tbd_insp else e_insp_val
+
+                        old_ir = str(current_data.get("IR Req.", "No"))
+                        ir_con = st.container()
+                        e_is_tbd_ir = st.checkbox("To be decided", value=(old_ir == "To be decided"), key=f"edit_tbd_ir_{matched_row_idx}")
+                        ir_opts = ["Yes", "No"]
+                        e_ir_val = ir_con.selectbox("11. IR Req.", ir_opts, index=ir_opts.index(old_ir) if old_ir in ir_opts else 0, disabled=e_is_tbd_ir, key=f"edit_ir_{matched_row_idx}")
+                        e_ir = "To be decided" if e_is_tbd_ir else e_ir_val
+
+                        old_date = str(current_data.get("Shipment date", ""))
+                        ship_con = st.container()
+                        e_is_tbd_ship = st.checkbox("To be decided", value=(old_date == "To be decided"), key=f"edit_tbd_ship_{matched_row_idx}")
+                        try: default_dt = pd.to_datetime(old_date, dayfirst=True).date() if old_date != "To be decided" and old_date.strip() else date.today()
+                        except: default_dt = date.today()
+                        e_ship_val = ship_con.date_input("12. Shipment date", value=default_dt, disabled=e_is_tbd_ship, key=f"edit_ship_{matched_row_idx}")
+                        e_shipment_date = "To be decided" if e_is_tbd_ship else str(e_ship_val)
+
+                        old_type = str(current_data.get("Type", ""))
+                        type_con = st.container()
+                        e_is_tbd_type = st.checkbox("To be decided", value=(old_type == "To be decided"), key=f"edit_tbd_type_{matched_row_idx}")
+                        type_opts = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product"]
+                        e_type_val = type_con.selectbox("13. Type", type_opts, index=type_opts.index(old_type) if old_type in type_opts else 0, disabled=e_is_tbd_type, key=f"edit_type_{matched_row_idx}")
+                        e_type = "To be decided" if e_is_tbd_type else e_type_val
+
+                        status_opt = ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"]
+                        old_status = str(current_data.get("Status", ""))
+                        e_status = st.selectbox("14. Status", status_opt, index=status_opt.index(old_status) if old_status in status_opt else 0)
+
+                    st.markdown("")
+                    if st.form_submit_button("🔄 อัปเดตข้อมูล (Update Google Sheets)"):
+                        latest_headers = [
+                            "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
+                            "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
+                            "Shipment date", "Type", "Status", "Packing date"
+                        ]
+                        updated_dict = {
+                            "Cultivar Name": e_cultivar, "Supplier Name": e_supplier, "Supplier Lot. No.": e_supp_lot,
+                            "Export Name": e_export, "THAI STICK Lot. No.": e_thai_lot, "Category": e_category, "Grade": e_grade,
+                            "Receive date": e_receive_date_str, "Quantity": str(e_qty), "Remark Qty": e_remark_qty,
+                            "Inspection Req.": e_insp, "IR Req.": e_ir, "Shipment date": e_shipment_date,
+                            "Type": e_type, "Status": e_status, "Packing date": "",
+                        }
                         updated_row_data = [str(updated_dict.get(h, "")) for h in latest_headers]
                         col_end_letter = chr(64 + len(latest_headers)).upper()
+                        
                         sheet.update(range_name=f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}", values=[updated_row_data])
                         get_cached_data.clear()
-                        st.success("อัปเดตข้อมูลเรียบร้อยแล้ว!")
+                        st.success(f"อัปเดตข้อมูลของ Lot: {selected_lot} (Size: {e_grade}) เรียบร้อยแล้ว! 🎉")
                         time.sleep(1)
                         st.rerun()
+    else:
+        st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
 
 # ==========================================
-# หน้าที่ 5.5: Adjustment Module
+# หน้าที่ 5.5: 🔧 Adjustment Module (โค้ดดั้งเดิมของคุณ)
 # ==========================================
 elif menu == "🔧 Adjustment Module":
     st.title("🔧 Adjustment Module (WIP & FG)")
-    data_main = get_cached_data("main", sheet, include_row_index=True)
+    st.markdown("ใช้สำหรับปรับแก้ตัวเลขยอด WIP และ FG ในกรณีที่ลงข้อมูลผิดพลาดหรือยอดไม่ตรงกับหน้างานจริง")
+
+    data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
-    
-    records_data = get_cached_data("packing", packing_records_sheet, include_row_index=True)
+    records_data = get_cached_data("packing", packing_records_sheet)
     df_packing_fg = pd.DataFrame(records_data) if records_data else pd.DataFrame()
 
     adj_options = []
     adj_map = {}
 
     if not df_main.empty:
+        df_main.columns = [str(c).strip() for c in df_main.columns]
+        df_main["Original_Row_Index"] = df_main.index + 2
         df_main["Clean_Qty"] = df_main["Quantity"].apply(clean_quantity) if "Quantity" in df_main.columns else 0.0
+        
         for _, r in df_main.iterrows():
-            lot_no = str(r.get("THAI STICK Lot. No.", "")).strip() or "No-Lot"
-            disp = f"[Main] Lot: {lot_no} | {r.get('Cultivar Name','')} | Qty: {r['Clean_Qty']:,.2f}"
+            lot_no = str(r.get("THAI STICK Lot. No.", "")).strip() or str(r.get("Supplier Lot. No.", "")).strip() or "No-Lot"
+            cat = str(r.get("Category", ""))
+            prod_name = str(r.get("Cultivar Name", ""))
+            grade_val = str(r.get("Grade", ""))
+            qty = float(r["Clean_Qty"])
+            
+            disp = f"[Main - {cat}] Lot: {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {qty:,.2f}"
             adj_options.append(disp)
-            adj_map[disp] = {"source": "main", "row_idx": r["Original_Row_Index"], "lot_no": lot_no, "current_qty": r["Clean_Qty"], "product": r.get('Cultivar Name','')}
+            adj_map[disp] = {
+                "source": "main", "row_idx": r["Original_Row_Index"], 
+                "lot_no": lot_no, "current_qty": qty, "product": prod_name
+            }
 
     if not df_packing_fg.empty:
+        df_packing_fg.columns = [str(c).strip() for c in df_packing_fg.columns]
+        df_packing_fg["Original_Row_Index"] = df_packing_fg.index + 2
         df_packing_fg["Clean_Qty"] = df_packing_fg["Quantity"].apply(clean_quantity) if "Quantity" in df_packing_fg.columns else 0.0
+        
         for _, r in df_packing_fg.iterrows():
-            lot_no = str(r.get("Generated FG Lot No.", "")).strip() or "No-Lot"
-            disp = f"[Packed FG] Lot: {lot_no} | {r.get('Export Name','')} | Qty: {r['Clean_Qty']:,.2f}"
+            lot_no = str(r.get("Generated FG Lot No.", "")).strip() or str(r.get("THAI STICK Lot. No.", "")).strip()
+            prod_name = str(r.get("Export Name", ""))
+            grade_val = str(r.get("Grade", ""))
+            qty = float(r["Clean_Qty"])
+            
+            disp = f"[Packed FG] Lot: {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {qty:,.2f}"
             adj_options.append(disp)
-            adj_map[disp] = {"source": "packing_records", "row_idx": r["Original_Row_Index"], "lot_no": lot_no, "current_qty": r["Clean_Qty"], "product": r.get('Export Name','')}
+            adj_map[disp] = {
+                "source": "packing_records", "row_idx": r["Original_Row_Index"],
+                "lot_no": lot_no, "current_qty": qty, "product": prod_name
+            }
 
-    selected_item = st.selectbox("🔍 เลือกรายการที่ต้องการปรับแก้ยอด", ["-- กรุณาเลือก --"] + adj_options)
+    selected_item = st.selectbox("🔍 เลือกรายการที่ต้องการปรับแก้ยอด (ค้นหาได้)", ["-- กรุณาเลือก --"] + adj_options)
     
     if selected_item != "-- กรุณาเลือก --":
         info = adj_map[selected_item]
         with st.form("adjustment_form"):
+            st.info(f"**กำลังปรับแก้ยอดของ:** {selected_item}")
             new_qty = st.number_input("จำนวนยอดที่ถูกต้อง (New Quantity)", min_value=0.0, step=0.1, value=float(info["current_qty"]))
-            remark = st.text_input("เหตุผลในการปรับยอด")
+            remark = st.text_input("เหตุผลในการปรับยอด (Reason for adjustment)", placeholder="ระบุเหตุผล เช่น คีย์ผิด, ยอดไม่ตรงจริง")
+            
             if st.form_submit_button("💾 ยืนยันการปรับแก้ยอด"):
                 try:
                     if info["source"] == "main":
                         headers = [str(h).strip() for h in sheet.row_values(1)]
-                        qty_idx = headers.index("Quantity") + 1
-                        sheet.update_cell(info["row_idx"], qty_idx, new_qty)
+                        qty_idx = headers.index("Quantity") + 1 if "Quantity" in headers else None
+                        if qty_idx:
+                            sheet.update_cell(info["row_idx"], qty_idx, new_qty)
+                        else:
+                            st.error("ไม่พบคอลัมน์ 'Quantity' ในชีตหลัก")
+                            st.stop()
+                            
                     elif info["source"] == "packing_records":
                         headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
-                        qty_idx = headers.index("Quantity") + 1
+                        qty_idx = headers.index("Quantity") + 1 if "Quantity" in headers else 8
                         packing_records_sheet.update_cell(info["row_idx"], qty_idx, new_qty)
 
-                    adjustment_sheet.append_row([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), info["source"], info["lot_no"], info["product"], info["current_qty"], new_qty, remark, str(date.today())], value_input_option='USER_ENTERED')
+                    log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    adjustment_sheet.append_row([
+                        log_time, info["source"], info["lot_no"], info["product"], 
+                        info["current_qty"], new_qty, remark, str(date.today())
+                    ], value_input_option='USER_ENTERED')
+                        
                     get_cached_data.clear()
-                    st.success("ปรับแก้ยอดสำเร็จ!")
-                    time.sleep(1)
+                    st.success(f"✅ ปรับแก้ยอด Lot: {info['lot_no']} จากเดิม {info['current_qty']} เป็น {new_qty} สำเร็จเรียบร้อยแล้ว!")
+                    time.sleep(1.5)
                     st.rerun()
-                except Exception as e: st.error(f"Error: {e}")
+                except Exception as e:
+                    st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
-# หน้าที่ 6: Packing Module (อัปเดตสถานะ Auto)
+# หน้าที่ 6: Packing Module (โครงสร้างเดิม 100% + Auto-Update Status)
 # ==========================================
 elif menu == "📦 Packing Module":
-    st.title("📦 Packing Module (WIP Conversion & Status Sync)")
+    st.title("📦 Packing Module (WIP Conversion & Dedicated FG Tracking)")
     
-    data = get_cached_data("main", sheet, include_row_index=True)
+    data = get_cached_data("main", sheet)
     if data:
         df = pd.DataFrame(data)
-        wip_df = df[df["Category"].astype(str).str.contains("WIP", case=False, na=False)].copy() if "Category" in df.columns else pd.DataFrame()
+        df.columns = [str(c).strip() for c in df.columns]
 
-        if not wip_df.empty:
+        if "Category" in df.columns:
+            wip_df = df[df["Category"].astype(str).str.contains("WIP", case=False, na=False)].copy()
+        else: wip_df = pd.DataFrame()
+
+        if wip_df.empty:
+            st.warning("⚠️ ยังไม่พบข้อมูลสินค้าประเภท 'WIP' ในระบบ")
+        else:
             wip_df["Clean_Qty"] = wip_df["Quantity"].apply(clean_quantity)
             available_wip = wip_df[wip_df["Clean_Qty"] > 0].copy()
-            
-            wip_options = []
-            wip_map = {}
-            for _, r in available_wip.iterrows():
-                lot_no = str(r.get("THAI STICK Lot. No.", "")).strip() or str(r.get("Supplier Lot. No.", "")).strip()
-                disp = f"Lot: {lot_no} | {r.get('Cultivar Name','')} | Qty: {r['Clean_Qty']:,.2f}"
-                wip_options.append(disp)
-                wip_map[disp] = {"lot_no": lot_no, "qty": r["Clean_Qty"], "row_idx": r["Original_Row_Index"], "supplier": r.get("Supplier Name", "")}
 
-            selected_wip_disps = st.multiselect("📦 1. เลือก WIP ที่ต้องการแพ็ก", wip_options)
-            
-            if selected_wip_disps:
-                with st.form("packing_form", clear_on_submit=True):
-                    wip_withdrawals = {disp: st.number_input(f"เบิกจาก {disp}", min_value=0.0, max_value=wip_map[disp]["qty"], value=float(wip_map[disp]["qty"])) for disp in selected_wip_disps}
-                    
-                    st.divider()
-                    packed_fg_name = st.text_input("ชื่อผลิตภัณฑ์หลังแพ็ก")
-                    g1_type = st.selectbox("เกรด", ["Big", "Small", "Mix", "F", "Grade A"]); g1_qty = st.number_input("จำนวนแพ็ก", min_value=0.0)
-                    waste_qty = st.number_input("จำนวนของเสีย (Waste Qty)", min_value=0.0)
-                    packing_date_str = str(date.today())
-                    
-                    if st.form_submit_button("🚀 ยืนยันการแพ็ก"):
-                        combined_source_lots = []
-                        sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
-                        col_end_letter = chr(64 + len(sheet_headers)).upper()
-                        
-                        for disp, w_qty in wip_withdrawals.items():
-                            if w_qty > 0:
-                                info = wip_map[disp]
-                                combined_source_lots.append(info["lot_no"])
-                                
-                                current_row_values = sheet.row_values(info["row_idx"])
-                                while len(current_row_values) < len(sheet_headers): current_row_values.append("")
-                                r_dict = {sheet_headers[i]: current_row_values[i] for i in range(len(sheet_headers))}
-                                
-                                remaining_wip = max(0.0, info["qty"] - w_qty)
-                                r_dict["Quantity"] = str(float(remaining_wip))
-                                r_dict["Status"] = "Packing done" if remaining_wip <= 0 else "Pending Packing"
-                                
-                                row_values = [str(r_dict.get(h, "")) for h in sheet_headers]
-                                sheet.update(range_name=f"A{info['row_idx']}:{col_end_letter}{info['row_idx']}", values=[row_values], value_input_option='USER_ENTERED')
-                        
-                        source_lots_str = ",".join(combined_source_lots)
-                        fg_lot = f"{source_lots_str}-FG-{datetime.now().strftime('%S')}"
-                        
-                        log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        packing_records_sheet.append_row([log_time, source_lots_str, "", "", packed_fg_name, fg_lot, g1_type, float(g1_qty), float(waste_qty), packing_date_str, ""], value_input_option='USER_ENTERED')
-                        
-                        # Auto-Update Picking Request Status
-                        pr_data = get_cached_data("picking_request", picking_request_sheet, include_row_index=True)
-                        if pr_data:
-                            pr_headers = [str(h).strip() for h in picking_request_sheet.row_values(1)]
-                            status_col_idx = pr_headers.index("Status") + 1 if "Status" in pr_headers else 11
-                            for pr_row in pr_data:
-                                if pr_row.get("Source Lot", "") in combined_source_lots and "รอแพ็ค" in str(pr_row.get("Status", "")):
-                                    picking_request_sheet.update_cell(pr_row["Original_Row_Index"], status_col_idx, "✅ พร้อมส่ง (Ready to Ship)")
+            if available_wip.empty: 
+                st.warning("⚠️ มีข้อมูล WIP แต่ทุก Lot มีจำนวนคงเหลือเป็น 0")
+            else:
+                available_wip["Original_Row_Index"] = available_wip.index + 2 
 
-                        get_cached_data.clear()
-                        st.success("✅ แพ็กสำเร็จ และอัปเดตสถานะใบเบิก (ถ้ามี) เป็นพร้อมส่งแล้ว!")
-                        time.sleep(1)
-                        st.rerun()
+                unique_cultivars = sorted([str(c) for c in available_wip["Cultivar Name"].unique() if str(c).strip() != ""])
+                selected_cultivar = st.selectbox("🔍 1. ค้นหาและกรองสายพันธุ์ (Cultivar Filter)", ["-- แสดงทั้งหมด --"] + unique_cultivars)
+
+                if selected_cultivar != "-- แสดงทั้งหมด --":
+                    filtered_wip = available_wip[available_wip["Cultivar Name"] == selected_cultivar]
+                else:
+                    filtered_wip = available_wip
+
+                wip_options = []
+                wip_map = {}
+
+                for _, r in filtered_wip.iterrows():
+                    lot_no = str(r.get("THAI STICK Lot. No.", "")).strip()
+                    if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+                    
+                    cultivar = str(r.get("Cultivar Name", ""))
+                    grade = str(r.get("Grade", ""))
+                    qty = float(r["Clean_Qty"])
+                    row_idx = r["Original_Row_Index"]
+                    
+                    supplier_name = str(r.get("Supplier Name", "")).strip()
+                    if not supplier_name: supplier_name = "ไม่ระบุ"
+                    
+                    disp = f"[บรรทัด {row_idx}] Supplier: {supplier_name} | Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
+
+                    wip_options.append(disp)
+                    wip_map[disp] = {
+                        "lot_no": lot_no,
+                        "cultivar": cultivar,
+                        "grade": grade,
+                        "qty": qty,
+                        "supplier": supplier_name, 
+                        "row_idx": row_idx,
+                        "row_data": r.to_dict()
+                    }
+
+                selected_wip_disps = st.multiselect("📦 2. เลือก WIP ที่ต้องการนำมาแพ็ก (เลือกได้มากกว่า 1 รายการ)", wip_options)
+
+                if selected_wip_disps:
+                    with st.form("packing_form", clear_on_submit=True):
+                        st.markdown("#### 📥 กำหนดจำนวนเบิกของแต่ละ Lot (Withdraw Quantities)")
+                        wip_withdrawals = {}
+                        
+                        for disp in selected_wip_disps:
+                            info = wip_map[disp]
+                            mq = info["qty"]
+                            w_qty = st.number_input(
+                                f"เบิกจาก {disp}", 
+                                min_value=0.0, 
+                                max_value=float(mq), 
+                                step=0.1, 
+                                value=float(mq), 
+                                key=f"pack_w_{info['row_idx']}"
+                            )
+                            wip_withdrawals[disp] = w_qty
+
+                        st.divider()
+                        default_fg_name = wip_map[selected_wip_disps[0]]["cultivar"]
+                        
+                        col_p1, col_p2 = st.columns(2)
+                        with col_p1: packing_date_str = str(st.date_input("Packing date", value=date.today()))
+                        with col_p2: packed_fg_name = st.text_input("ชื่อผลิตภัณฑ์หลังแพ็ก", value=default_fg_name)
+
+                        st.divider()
+                        st.markdown("#### 📤 ผลผลิตที่ได้จากการแพ็ก (Finished Goods Output)")
+                        grade_options = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
+                        
+                        c1, c2 = st.columns(2)
+                        with c1: g1_type = st.selectbox("เกรดช่องที่ 1", grade_options, index=0)
+                        with c2: g1_qty = st.number_input("จำนวนช่องที่ 1 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g1")
+
+                        c3, c4 = st.columns(2)
+                        with c3: g2_type = st.selectbox("เกรดช่องที่ 2", grade_options, index=1)
+                        with c4: g2_qty = st.number_input("จำนวนช่องที่ 2 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g2")
+
+                        c5, c6 = st.columns(2)
+                        with c5: g3_type = st.selectbox("เกรดช่องที่ 3", grade_options, index=2)
+                        with c6: g3_qty = st.number_input("จำนวนช่องที่ 3 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g3")
+
+                        c7, c8 = st.columns(2)
+                        with c7: g4_type = st.selectbox("เกรดช่องที่ 4", grade_options, index=3)
+                        with c8: g4_qty = st.number_input("จำนวนช่องที่ 4 (กรอกเป็นตัวเลข)", min_value=0.0, step=0.1, key="g4")
+
+                        st.divider()
+                        waste_qty = st.number_input("จำนวนของเสีย (Waste Qty)", min_value=0.0, step=0.1, key="waste_pack")
+                        note = st.text_area("หมายเหตุเพิ่มเติม (Note)", key="note_pack")
+
+                        if st.form_submit_button("🚀 ยืนยันการแพ็กและบันทึกลง Google Sheets", key="packing_submit_btn"):
+                            total_withdraw = sum(wip_withdrawals.values())
+                            total_packed_output = g1_qty + g2_qty + g3_qty + g4_qty
+                          
+                            if total_withdraw <= 0: 
+                                st.error("❌ กรุณาระบุจำนวนที่เบิกมาแพ็กมากกว่า 0 อย่างน้อย 1 รายการ")
+                            elif (total_packed_output + waste_qty) > total_withdraw: 
+                                st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
+                            else:
+                                with st.spinner("⏳ กำลังบันทึกข้อมูล..."):
+                                    sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
+                                    col_end_letter = chr(64 + len(sheet_headers)).upper()
+                                    
+                                    combined_source_lots = [] 
+                                    combined_suppliers = []
+                                    
+                                    for disp, w_qty in wip_withdrawals.items():
+                                        if w_qty > 0:
+                                            info = wip_map[disp]
+                                            row_idx = info["row_idx"]
+                                            lot_no = info["lot_no"]
+                                            supplier = info.get("supplier", "ไม่ระบุ")
+                                            
+                                            combined_source_lots.append(lot_no)
+                                            if supplier not in combined_suppliers:
+                                                combined_suppliers.append(supplier)
+                                            
+                                            current_row_values = sheet.row_values(row_idx)
+                                            while len(current_row_values) < len(sheet_headers):
+                                                current_row_values.append("")
+                                            
+                                            r_dict = {sheet_headers[i]: current_row_values[i] for i in range(len(sheet_headers))}
+                                            
+                                            remaining_wip = info["qty"] - w_qty
+                                            new_status = "Packing done" if remaining_wip <= 0 else "Pending Packing"
+                                            remaining_wip = max(0.0, remaining_wip)
+                                            
+                                            r_dict["Quantity"] = str(float(remaining_wip))
+                                            r_dict["Status"] = new_status
+                                            
+                                            row_values = [str(r_dict.get(h, "")) for h in sheet_headers]
+                                            sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[row_values], value_input_option='USER_ENTERED')
+
+                                    source_lots_str = ", ".join(combined_source_lots) if combined_source_lots else "TS-MIX"
+                                    base_lot = combined_source_lots[0] if combined_source_lots else "TS-MIX"
+                                    suppliers_str = ", ".join(combined_suppliers) if combined_suppliers else "ไม่ระบุ" 
+
+                                    breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
+                                    log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    
+                                    packing_log_row = [
+                                        log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, breakdown_str, 
+                                        float(total_packed_output), float(waste_qty), packing_date_str, note
+                                    ]
+                                    packing_sheet.append_row(packing_log_row, value_input_option='USER_ENTERED')
+
+                                    fg_items = [(g1_type, g1_qty), (g2_type, g2_qty), (g3_type, g3_qty), (g4_type, g4_qty)]
+                                    created_count = 0
+                                    
+                                    for idx_fg, (g_type, g_q) in enumerate(fg_items):
+                                        if g_q > 0:
+                                            created_count += 1
+                                            custom_fg_lot = f"{base_lot}-FG{created_count}-{g_type}"
+                                            
+                                            rec_row = [
+                                                log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, custom_fg_lot, 
+                                                g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
+                                            ]
+                                            packing_records_sheet.append_row(rec_row, value_input_option='USER_ENTERED')
+                                            
+                                    # ✨ ระบบ Auto-Update สถานะ Picking Request (เชื่อมกับ Packing)
+                                    pr_data = get_cached_data("picking_request", picking_request_sheet, include_row_index=True)
+                                    if pr_data:
+                                        pr_headers = [str(h).strip() for h in picking_request_sheet.row_values(1)]
+                                        status_col_idx = pr_headers.index("Status") + 1 if "Status" in pr_headers else 11
+                                        for pr_row in pr_data:
+                                            # ถ้า Source Lot ตรงกับที่เบิกมาแพ็ก และสถานะยังรอแพ็กอยู่
+                                            if pr_row.get("Source Lot", "") in combined_source_lots and "รอแพ็ค" in str(pr_row.get("Status", "")):
+                                                picking_request_sheet.update_cell(pr_row["Original_Row_Index"], status_col_idx, "✅ พร้อมส่ง (Ready to Ship)")
+
+                                    get_cached_data.clear()
+                                    st.success(f"✅ บันทึกสำเร็จ! นำ WIP จำนวน {total_withdraw:,.2f} g ไปแพ็ก และสร้าง Lot FG ใหม่ {created_count} รายการ 🎉")
+                                    time.sleep(1)
+                                    st.rerun()
+
+    st.divider()
+    st.subheader("📑 ประวัติการผลิตและรหัส Lot FG แยกเกรด (Packing Records Sheet)")
+    records_data = get_cached_data("packing", packing_records_sheet)
+    if records_data: st.dataframe(format_df_quantity(pd.DataFrame(records_data)), use_container_width=True)
 
 # ==========================================
-# หน้าที่ 7: Shipped Out Module
+# หน้าที่ 7: Shipped Out Module (โครงสร้างเดิม 100% + Auto-Update Status)
 # ==========================================
 elif menu == "🚚 Shipped Out Module":
-    st.title("🚚 Shipped Out Module")
-    data_main = get_cached_data("main", sheet, include_row_index=True)
+    st.title("🚚 Shipped Out Module (Multi-Product Shipping & Stock Deduction)")
+    st.markdown("บันทึกการส่งสินค้าออกทั้ง WIP และ FG (ดึงข้อมูลจากทั้งหน้า Trading Data และ Packing Records)")
+
+    data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
-    records_data = get_cached_data("packing", packing_records_sheet, include_row_index=True)
+
+    records_data = get_cached_data("packing", packing_records_sheet)
     df_packing_fg = pd.DataFrame(records_data) if records_data else pd.DataFrame()
 
     combined_options = []
     inventory_map = {}
 
     if not df_main.empty and "Category" in df_main.columns:
+        df_main["Original_Row_Index"] = df_main.index + 2 
         df_main["Clean_Qty"] = df_main["Quantity"].apply(clean_quantity)
         main_avail = df_main[(df_main["Clean_Qty"] > 0) & (~df_main["Status"].astype(str).str.strip().str.lower().eq("delivered"))]
+        
         for _, r in main_avail.iterrows():
             cat = str(r.get("Category", ""))
-            lot_no = str(r.get("THAI STICK Lot. No.", "")).strip() or "No-Lot"
-            disp = f"[Main - {cat}] {lot_no} | Qty: {r['Clean_Qty']:,.1f}"
+            lot_no = str(r.get("THAI STICK Lot. No.", "")).strip()
+            if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
+            if not lot_no: lot_no = "No-Lot"
+
+            prod_name = str(r.get("Cultivar Name", ""))
+            grade_val = str(r.get("Grade", ""))
+            max_q = float(r["Clean_Qty"])
+
+            if "WIP" in cat.upper():
+                disp = f"[WIP] {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {max_q:,.1f}"
+                source = "main"
+                c = "WIP (Work in Progress)"
+            elif "FG" in cat.upper():
+                disp = f"[FG - Stock] {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {max_q:,.1f}"
+                source = "main"
+                c = "FG (Finished Goods)"
+            else: continue
+
             combined_options.append(disp)
-            inventory_map[disp] = {"category": cat, "lot_no": lot_no, "max_qty": r["Clean_Qty"], "source": "main", "row_idx": r["Original_Row_Index"], "product": r.get("Cultivar Name",""), "grade": r.get("Grade","")}
+            inventory_map[disp] = {
+                "category": c, "lot_no": lot_no, "product": prod_name, "grade": grade_val,
+                "max_qty": max_q, "source": source, "row_idx": r["Original_Row_Index"], "row_data": r.to_dict()
+            }
 
     if not df_packing_fg.empty:
+        df_packing_fg["Original_Row_Index"] = df_packing_fg.index + 2
         df_packing_fg["Clean_Qty"] = df_packing_fg["Quantity"].apply(clean_quantity)
         fg_avail = df_packing_fg[df_packing_fg["Clean_Qty"] > 0]
+        
         for _, r in fg_avail.iterrows():
-            lot_no = str(r.get("Generated FG Lot No.", "")).strip() or "No-Lot"
-            disp = f"[FG - Packed] {lot_no} | Qty: {r['Clean_Qty']:,.1f}"
+            lot_no = str(r.get("Generated FG Lot No.", "")).strip()
+            if not lot_no: lot_no = str(r.get("THAI STICK Lot. No.", "")).strip()
+            
+            prod_name = str(r.get("Export Name", ""))
+            grade_val = str(r.get("Grade", ""))
+            max_q = float(r["Clean_Qty"])
+
+            disp = f"[FG - Packed] {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {max_q:,.1f}"
             combined_options.append(disp)
-            inventory_map[disp] = {"category": "FG (Finished Goods)", "lot_no": lot_no, "max_qty": r["Clean_Qty"], "source": "packing_records", "row_idx": r["Original_Row_Index"], "product": r.get("Export Name",""), "grade": r.get("Grade","")}
+            inventory_map[disp] = {
+                "category": "FG (Finished Goods)", "lot_no": lot_no, "product": prod_name,
+                "grade": grade_val, "max_qty": max_q, "source": "packing_records", "row_idx": r["Original_Row_Index"]
+            }
+
+    if "ship_row_count" not in st.session_state: st.session_state.ship_row_count = 3
+
+    col_cnt1, col_cnt2, _ = st.columns([2, 2, 6])
+    with col_cnt1: 
+        if st.button("➕ เพิ่มช่อง"): st.session_state.ship_row_count = min(10, st.session_state.ship_row_count + 1); st.rerun()
+    with col_cnt2: 
+        if st.button("➖ ลดช่อง"): st.session_state.ship_row_count = max(1, st.session_state.ship_row_count - 1); st.rerun()
 
     with st.form("shipped_out_multi_form"):
-        consignee = st.text_input("ชื่อปลายทาง (Consignee)")
-        client_name = st.text_input("ลูกค้า (Client)")
-        shipping_reason = st.selectbox("เหตุผลในการส่ง", ["EXPORT", "DOMESTIC SALE", "SAMPLE"])
-        shipment_date_str = str(st.date_input("วันที่จัดส่ง", value=date.today()))
+        st.subheader("1. ข้อมูลการจัดส่งทั่วไป")
+        col_s1, col_s2, col_s3 = st.columns(3)
+        with col_s1: consignee = st.text_input("ชื่อปลายทาง (Consignee)")
+        with col_s2: client_name = st.text_input("ลูกค้า (Client)")
+        with col_s3: shipping_reason = st.selectbox("เหตุผลในการส่ง (Shipping Reason)", ["SAMPLE", "EXPORT", "RETURN", "REJECT", "DOMESTIC SALE"])
 
-        chosen_display = st.selectbox(f"เลือกรายการสินค้า", ["-- กรุณาเลือก --"] + combined_options)
-        max_q = inventory_map.get(chosen_display, {}).get("max_qty", 0.0) if chosen_display and not chosen_display.startswith("--") else 0.0
-        ship_q = st.number_input(f"จำนวนส่งออก (Max: {max_q:,.1f})", min_value=0.0, max_value=max_q if max_q > 0 else 100000.0, step=0.1)
-        
-        if st.form_submit_button("🚚 ยืนยันการส่งสินค้าออก"):
-            if not consignee or ship_q <= 0:
-                st.error("กรุณากรอกข้อมูลให้ครบถ้วนและจำนวนส่งออกต้องมากกว่า 0")
+        shipment_date_str = str(st.date_input("วันที่จัดส่ง (Shipment Date)", value=date.today()))
+
+        st.divider()
+        st.subheader(f"2. รายการผลิตภัณฑ์ที่ต้องการส่งออก (แสดง {st.session_state.ship_row_count} ช่อง)")
+        shipment_items = []
+
+        for i in range(st.session_state.ship_row_count):
+            row_c1, row_c2 = st.columns([4, 2])
+            with row_c1: chosen_display = st.selectbox(f"เลือกรายการสินค้า #{i+1}", ["-- กรุณาเลือก --"] + combined_options, key=f"ship_item_{i}")
+            
+            max_q = inventory_map.get(chosen_display, {}).get("max_qty", 0.0) if chosen_display and not chosen_display.startswith("--") else 0.0
+            with row_c2: ship_q = st.number_input(f"จำนวนส่งออก (Max: {max_q:,.1f})", min_value=0.0, max_value=max_q if max_q > 0 else 1000000.0, step=0.1, key=f"ship_qty_{i}")
+
+            if chosen_display and not chosen_display.startswith("--") and ship_q > 0:
+                item_info = inventory_map[chosen_display]
+                shipment_items.append({**item_info, "qty": ship_q})
+
+        note_ship = st.text_area("หมายเหตุ (Note)")
+        if st.form_submit_button("🚚 ยืนยันการส่งสินค้าออกทั้งหมด"):
+            if not consignee.strip(): st.error("❌ กรุณาระบุชื่อปลายทาง (Consignee)")
+            elif not client_name.strip(): st.error("❌ กรุณาระบุชื่อลูกค้า (Client)")
+            elif not shipment_items: st.error("❌ กรุณาเลือก Lot สินค้าและระบุจำนวนที่ต้องการส่งมากกว่า 0 อย่างน้อย 1 รายการ")
             else:
-                item = inventory_map[chosen_display]
-                if item["source"] == "main":
-                    sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
-                    current_row_values = sheet.row_values(item["row_idx"])
-                    while len(current_row_values) < len(sheet_headers): current_row_values.append("")
-                    row_dict = {sheet_headers[i]: current_row_values[i] for i in range(len(sheet_headers))}
-                    remaining = max(0.0, clean_quantity(row_dict.get("Quantity", 0)) - ship_q)
-                    row_dict["Quantity"] = str(remaining)
-                    row_dict["Status"] = "Delivered" if remaining <= 0 else row_dict["Status"]
-                    sheet.update(range_name=f"A{item['row_idx']}:{chr(64 + len(sheet_headers)).upper()}{item['row_idx']}", values=[[str(row_dict.get(h, "")) for h in sheet_headers]], value_input_option='USER_ENTERED')
-                
-                elif item["source"] == "packing_records":
-                    pack_headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
-                    qty_col_idx = pack_headers.index("Quantity") + 1
-                    all_pack_records = get_cached_data("packing", packing_records_sheet)
-                    current_qty = clean_quantity(all_pack_records[item["row_idx"] - 2].get("Quantity", 0))
-                    packing_records_sheet.update_cell(item["row_idx"], qty_col_idx, max(0.0, current_qty - ship_q))
-                
-                shipped_sheet.append_row([datetime.now().strftime("%Y-%m-%d %H:%M:%S"), item["category"], item["lot_no"], item["product"], item["grade"], str(ship_q), consignee, client_name, shipping_reason, shipment_date_str, ""], value_input_option='USER_ENTERED')
-                
-                # Auto update Picking Request Log to Delivered
+                log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                success_count = 0
+
+                for item in shipment_items:
+                    row_idx = item["row_idx"]
+                    source = item["source"]
+                    qty = item["qty"]
+
+                    if source == "main":
+                        sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
+                        current_row_values = sheet.row_values(row_idx)
+                        
+                        while len(current_row_values) < len(sheet_headers):
+                            current_row_values.append("")
+
+                        row_dict = {sheet_headers[i]: current_row_values[i] for i in range(len(sheet_headers))}
+                        
+                        current_qty = clean_quantity(row_dict.get("Quantity", 0))
+                        remaining_qty = max(0.0, current_qty - qty)
+                        new_status = "Delivered" if remaining_qty <= 0 else ("Pending Packing" if "WIP" in item["category"] else "Trading Goods Received to Stock")
+
+                        row_dict["Quantity"] = str(remaining_qty)
+                        row_dict["Status"] = new_status
+
+                        updated_row_values = [str(row_dict.get(h, "")) for h in sheet_headers]
+                        col_end_letter = chr(64 + len(sheet_headers)).upper()
+                        
+                        sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[updated_row_values], value_input_option='USER_ENTERED')
+
+                    elif source == "packing_records":
+                        pack_headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
+                        qty_col_idx = pack_headers.index("Quantity") + 1 if "Quantity" in pack_headers else 8
+                        
+                        all_pack_records = get_cached_data("packing", packing_records_sheet)
+                        if row_idx and (row_idx - 2) < len(all_pack_records):
+                            current_qty = clean_quantity(all_pack_records[row_idx - 2].get("Quantity", 0))
+                            packing_records_sheet.update_cell(row_idx, qty_col_idx, max(0.0, current_qty - qty))
+
+                    shipped_sheet.append_row([
+                        log_time, item["category"], item["lot_no"], item["product"], item["grade"], str(qty),
+                        consignee, client_name, shipping_reason, shipment_date_str, note_ship
+                    ], value_input_option='USER_ENTERED')
+                    success_count += 1
+                    
+                # ✨ ระบบ Auto-Update สถานะ Picking Request (เชื่อมกับการส่งออก)
                 pr_data = get_cached_data("picking_request", picking_request_sheet, include_row_index=True)
                 if pr_data:
                     pr_headers = [str(h).strip() for h in picking_request_sheet.row_values(1)]
-                    status_col_idx = pr_headers.index("Status") + 1
+                    status_col_idx = pr_headers.index("Status") + 1 if "Status" in pr_headers else 11
                     for pr_row in pr_data:
-                        if pr_row.get("Source Lot", "") == item["lot_no"] and pr_row.get("Consignee", "") == consignee:
-                            picking_request_sheet.update_cell(pr_row["Original_Row_Index"], status_col_idx, "📦 Delivered (จัดส่งแล้ว)")
-                            
+                        # อิงจากรายการที่เพิ่งตัดสต็อกไป และชื่อ Consignee ตรงกัน
+                        for shipped_item in shipment_items:
+                            if pr_row.get("Source Lot", "") == shipped_item["lot_no"] and pr_row.get("Consignee", "") == consignee:
+                                picking_request_sheet.update_cell(pr_row["Original_Row_Index"], status_col_idx, "📦 Delivered (จัดส่งแล้ว)")
+
                 get_cached_data.clear()
-                st.success("บันทึกการส่งออกและตัดสต็อกสำเร็จ!")
+                st.success(f"✅ บันทึกการส่งออกสำเร็จทั้งหมด {success_count} รายการและตัดสต็อกต้นทางเรียบร้อยแล้ว! 🎉")
                 time.sleep(1)
                 st.rerun()
+
+    st.divider()
+    st.subheader("📑 ประวัติการส่งสินค้าออก (Shipped Out Log)")
+    shipped_data = get_cached_data("shipped", shipped_sheet)
+    if shipped_data: st.dataframe(format_df_quantity(pd.DataFrame(shipped_data)), use_container_width=True)
