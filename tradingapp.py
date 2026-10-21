@@ -485,7 +485,7 @@ elif menu == "📊 Stock Summary & Details":
             min-width: 145px; max-width: 220px; background: var(--tint);
             color: var(--deep); text-align: center; font-size: 12px;
             font-weight: 700; overflow-wrap: anywhere; }
-        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 22px; line-height: 1.5; }
+        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 20px; line-height: 1.5; }
         .stock-matrix th:first-child { position: sticky; left: 0; z-index: 1;
             min-width: 125px; background: #fff; color: #475569;
             text-align: left; white-space: nowrap; box-shadow: 3px 0 8px #0f172a05; }
