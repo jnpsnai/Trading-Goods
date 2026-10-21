@@ -210,11 +210,13 @@ def format_df_quantity(df):
 
 import math
 
-PICKING_HEADERS = [
+PICKING_BASE_HEADERS = [
     "Request ID", "Line ID", "Created At", "Cultivar Name", "Export Name",
     "Source Categories", "Grade", "Volume", "Consignee", "True Consignee",
     "Expected Shipping Date", "Required Category", "Note",
 ]
+PICKING_HEADERS = PICKING_BASE_HEADERS + ["Project Owner", "Type", "Supplier Name"]
+PICKING_TYPES = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product", "To be decided"]
 
 
 def picking_text(value):
@@ -255,12 +257,15 @@ def build_picking_catalog(main_records, packing_records):
             return
         item = catalog.setdefault(picking_key(cultivar), {
             "cultivar": cultivar, "export_names": [], "sources": [],
-            "wip_qty": 0.0, "fg_by_grade": {},
+            "wip_qty": 0.0, "fg_by_grade": {}, "suppliers": [],
         })
         if export_name and export_name not in item["export_names"]:
             item["export_names"].append(export_name)
         if category not in item["sources"]:
             item["sources"].append(category)
+        supplier = picking_text(record.get("Supplier Name"))
+        if supplier and supplier not in item["suppliers"]:
+            item["suppliers"].append(supplier)
         grade = picking_text(record.get("Grade")).upper() or "GENERAL"
         if category == "FG":
             item["fg_by_grade"][grade] = item["fg_by_grade"].get(grade, 0.0) + quantity
@@ -278,7 +283,7 @@ def build_picking_catalog(main_records, packing_records):
     return catalog
 
 
-def prepare_picking_lines(records, catalog, default_consignee="", default_true_consignee=""):
+def prepare_picking_lines(records, catalog, default_consignee="", default_true_consignee="", default_project_owner="", default_type=""):
     lines = []
     for index, record in enumerate(records, start=1):
         cultivar = picking_text(record.get("Cultivar Name"))
@@ -286,9 +291,11 @@ def prepare_picking_lines(records, catalog, default_consignee="", default_true_c
         raw_quantity = record.get("Volume", "")
         consignee = picking_text(record.get("Consignee")) or picking_text(default_consignee)
         true_consignee = picking_text(record.get("True Consignee")) or picking_text(default_true_consignee)
+        project_owner = picking_text(record.get("Project Owner")) or picking_text(default_project_owner)
+        product_type = picking_text(record.get("Type")) or picking_text(default_type)
         # Ignore only completely empty editor rows.
         if not any(picking_text(record.get(name)) for name in
-                   ["Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Note"]):
+                   ["Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Note"]):
             continue
         item = catalog.get(picking_key(cultivar))
         quantity = picking_quantity(raw_quantity)
@@ -300,6 +307,8 @@ def prepare_picking_lines(records, catalog, default_consignee="", default_true_c
             raise ValueError(f"รายการที่ {index}: จำนวนต้องเป็นตัวเลขมากกว่า 0")
         if not consignee or not true_consignee:
             raise ValueError(f"รายการที่ {index}: กรุณาระบุ Consignee และ True Consignee")
+        if not project_owner or not product_type:
+            raise ValueError(f"รายการที่ {index}: กรุณาระบุ Project Owner และ Type ผลิตภัณฑ์")
         lines.append({
             "Cultivar Name": item["cultivar"],
             "Export Name": " / ".join(item["export_names"]),
@@ -308,6 +317,8 @@ def prepare_picking_lines(records, catalog, default_consignee="", default_true_c
             "Volume": quantity,
             "Consignee": consignee,
             "True Consignee": true_consignee,
+            "Project Owner": project_owner, "Type": product_type,
+            "Supplier Name": " / ".join(item.get("suppliers", [])),
             "Required Category": "FG (Finished Goods)",
             "Note": picking_text(record.get("Note")),
         })
@@ -372,7 +383,7 @@ def read_picking_records(worksheet):
     if not values:
         return []
     headers = [str(value).strip() for value in values[0]]
-    missing = [header for header in PICKING_HEADERS if header not in headers]
+    missing = [header for header in PICKING_BASE_HEADERS if header not in headers]
     if missing:
         raise ValueError("หัวตาราง Picking_Requests ไม่ครบ: " + ", ".join(missing))
     if len(headers) != len(set(headers)):
@@ -383,6 +394,10 @@ def read_picking_records(worksheet):
             continue
         record = {header: values_row[index] if index < len(values_row) else ""
                   for index, header in enumerate(headers)}
+        if not any(picking_text(record.get(header)) for header in PICKING_HEADERS):
+            continue
+        for header in PICKING_HEADERS:
+            record.setdefault(header, "")
         record["Original_Row_Index"] = row_number
         records.append(record)
     return records
@@ -414,7 +429,7 @@ def picking_same_payload(existing, expected):
         for header in PICKING_HEADERS:
             if header == "Volume":
                 actual_quantity = picking_quantity(actual.get(header))
-                if actual_quantity is None or not math.isclose(actual_quantity, wanted[header], rel_tol=1e-12, abs_tol=1e-9):
+                if actual_quantity is None or picking_quantity(wanted.get(header)) is None or not math.isclose(actual_quantity, picking_quantity(wanted[header]), rel_tol=1e-12, abs_tol=1e-9):
                     return False
             elif picking_text(actual.get(header)) != picking_text(wanted.get(header)):
                 return False
@@ -439,7 +454,7 @@ def save_picking_request(spreadsheet, request_id, created_at, lines, shipping_da
         quantity = picking_quantity(line.get("Volume"))
         if quantity is None or quantity <= 0:
             raise ValueError(f"รายการที่ {index}: จำนวนต้องเป็นตัวเลขมากกว่า 0")
-        for required in ["Cultivar Name", "Grade", "Consignee", "True Consignee"]:
+        for required in ["Cultivar Name", "Grade", "Consignee", "True Consignee", "Project Owner", "Type"]:
             if not picking_text(line.get(required)):
                 raise ValueError(f"รายการที่ {index}: กรุณาระบุ {required}")
         record = {header: picking_text(line.get(header)) for header in PICKING_HEADERS}
@@ -463,7 +478,7 @@ def save_picking_request(spreadsheet, request_id, created_at, lines, shipping_da
                 raise creation_error
     raw = worksheet.get_all_values()
     if not raw or not any(any(picking_text(value) for value in row) for row in raw):
-        worksheet.update(range_name="A1:M1", values=[PICKING_HEADERS], value_input_option="RAW")
+        worksheet.update(range_name=f"A1:{gspread.utils.rowcol_to_a1(1, len(PICKING_HEADERS))}", values=[PICKING_HEADERS], value_input_option="RAW")
     records = read_picking_records(worksheet)
     headers = [str(header).strip() for header in worksheet.row_values(1)]
 
@@ -477,9 +492,10 @@ def save_picking_request(spreadsheet, request_id, created_at, lines, shipping_da
 
     already_saved = check_existing(records)
     if not already_saved:
-        values = [[record.get(header, "") for header in headers] for record in payload]
+        headers, requests = picking_schema_requests(worksheet, headers)
+        requests.append(picking_append_cells(worksheet, headers, payload))
         try:
-            worksheet.append_rows(values, value_input_option="RAW")
+            spreadsheet.batch_update({"requests": requests})
         except Exception:
             # A timeout can happen after Sheets has accepted the append.
             # Confirm the stable IDs before allowing a retry to append again.
@@ -491,12 +507,347 @@ def save_picking_request(spreadsheet, request_id, created_at, lines, shipping_da
     return {"request_id": request_id, "line_count": len(payload), "already_saved": already_saved}
 
 
+def picking_schema_requests(worksheet, headers):
+    """Add missing optional Picking columns without rewriting existing headers.
+
+    Return the physical header order and requests to include in the same
+    spreadsheet batch as the successful create/edit mutation.
+    """
+    extended_headers = [str(header).strip() for header in headers]
+    if len(extended_headers) != len(set(extended_headers)):
+        raise ValueError("พบชื่อคอลัมน์ซ้ำใน Picking_Requests กรุณาตรวจสอบหัวตาราง")
+    missing_base = [header for header in PICKING_BASE_HEADERS if header not in extended_headers]
+    if missing_base:
+        raise ValueError("หัวตาราง Picking_Requests ไม่ครบ: " + ", ".join(missing_base))
+
+    missing_optional = [header for header in PICKING_HEADERS
+                        if header not in PICKING_BASE_HEADERS and header not in extended_headers]
+    first_new_column = len(extended_headers)
+    extended_headers.extend(missing_optional)
+    requests = []
+    missing_columns = len(extended_headers) - int(worksheet.col_count)
+    if missing_columns > 0:
+        requests.append({"appendDimension": {
+            "sheetId": worksheet.id, "dimension": "COLUMNS", "length": missing_columns,
+        }})
+    if missing_optional:
+        requests.append({"updateCells": {
+            "range": {"sheetId": worksheet.id, "startRowIndex": 0, "endRowIndex": 1,
+                      "startColumnIndex": first_new_column, "endColumnIndex": len(extended_headers)},
+            "rows": [{"values": [
+                {"userEnteredValue": {"stringValue": header}} for header in missing_optional
+            ]}],
+            "fields": "userEnteredValue",
+        }})
+    return extended_headers, requests
+
+
+def picking_append_cells(worksheet, headers, records):
+    """Build a typed RAW-style append after the last occupied sheet row."""
+    headers = [str(header).strip() for header in headers]
+    if len(headers) != len(set(headers)):
+        raise ValueError("พบชื่อคอลัมน์ซ้ำใน Picking_Requests กรุณาตรวจสอบหัวตาราง")
+    missing = [header for header in PICKING_HEADERS if header not in headers]
+    if missing:
+        raise ValueError("หัวตาราง Picking_Requests ไม่ครบ: " + ", ".join(missing))
+    rows = []
+    for record in records:
+        cells = []
+        for header in headers:
+            if header not in PICKING_HEADERS or header not in record:
+                cells.append({})
+            elif header == "Volume":
+                quantity = picking_quantity(record[header])
+                if quantity is None or quantity <= 0:
+                    raise ValueError("จำนวนต้องเป็นตัวเลขมากกว่า 0")
+                cells.append({"userEnteredValue": {"numberValue": quantity}})
+            else:
+                cells.append({"userEnteredValue": {"stringValue": picking_text(record[header])}})
+        rows.append({"values": cells})
+    if not rows:
+        raise ValueError("กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการ")
+    return {"appendCells": {
+        "sheetId": worksheet.id, "rows": rows, "fields": "userEnteredValue",
+    }}
+def picking_shipping_date(value):
+    text = picking_text(value)
+    if text.upper() == "TBC":
+        return "TBC"
+    for pattern in ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(text, pattern).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError("วันจัดส่งต้องเป็น YYYY-MM-DD, DD/MM/YYYY หรือ TBC")
+
+
+def picking_edit_catalog(catalog, existing_rows):
+    # Saved cultivars remain editable even after their stock reaches zero.
+    result = dict(catalog)
+    for row in existing_rows:
+        cultivar = picking_text(row.get("Cultivar Name"))
+        if cultivar and picking_key(cultivar) not in result:
+            result[picking_key(cultivar)] = {
+                "cultivar": cultivar,
+                "export_names": [picking_text(row.get("Export Name"))] if picking_text(row.get("Export Name")) else [],
+                "sources": [picking_text(row.get("Source Categories"))] if picking_text(row.get("Source Categories")) else [],
+                "suppliers": [picking_text(row.get("Supplier Name"))] if picking_text(row.get("Supplier Name")) else [],
+                "wip_qty": 0.0, "fg_by_grade": {},
+            }
+    return result
+
+
+def prepare_picking_changes(records, catalog, existing_rows):
+    edit_catalog = picking_edit_catalog(catalog, existing_rows)
+    lines = []
+    for index, record in enumerate(records, start=1):
+        if not any(picking_text(record.get(header)) for header in
+                   ["Line ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Expected Shipping Date", "Note"]):
+            continue
+        try:
+            line = prepare_picking_lines([record], edit_catalog)[0]
+            line["Expected Shipping Date"] = picking_shipping_date(record.get("Expected Shipping Date"))
+        except ValueError as error:
+            raise ValueError(f"แถวแก้ไขที่ {index}: {error}") from None
+        line["Line ID"] = picking_text(record.get("Line ID"))
+        # Keep saved reference metadata when only quantity/recipients/date change.
+        original = next((row for row in existing_rows if picking_text(row.get("Line ID")) == line["Line ID"]), None)
+        if original and picking_key(original.get("Cultivar Name")) == picking_key(line["Cultivar Name"]):
+            for header in ["Cultivar Name", "Export Name", "Source Categories", "Supplier Name"]:
+                line[header] = picking_text(original.get(header))
+            if not line["Supplier Name"]:
+                line["Supplier Name"] = " / ".join(edit_catalog[picking_key(line["Cultivar Name"])].get("suppliers", []))
+        lines.append(line)
+    if not lines:
+        raise ValueError("ต้องมีสินค้าอย่างน้อย 1 รายการ หากต้องการยกเลิกทั้งคำขอให้ใช้ปุ่มลบ Request")
+    return lines
+
+
+def picking_owned_cell_updates(worksheet, headers, row_number, record=None):
+    # Touch only our columns. Custom columns and formulas remain in place.
+    requests = []
+    owned = sorted(headers.index(header) for header in PICKING_HEADERS if header in headers)
+    groups = []
+    for index in owned:
+        if not groups or index != groups[-1][-1] + 1:
+            groups.append([])
+        groups[-1].append(index)
+    for group in groups:
+        cells = []
+        for index in group:
+            if record is None:
+                cells.append({})  # fields=userEnteredValue clears this cell only.
+            else:
+                header = headers[index]
+                value = record.get(header, "")
+                entered = {"numberValue": float(value)} if header == "Volume" else {"stringValue": picking_text(value)}
+                cells.append({"userEnteredValue": entered})
+        requests.append({"updateCells": {
+            "range": {"sheetId": worksheet.id, "startRowIndex": row_number - 1,
+                      "endRowIndex": row_number, "startColumnIndex": group[0],
+                      "endColumnIndex": group[-1] + 1},
+            "rows": [{"values": cells}], "fields": "userEnteredValue",
+        }})
+    return requests
+
+
+def update_picking_request(spreadsheet, request_id, expected_rows, lines):
+    request_id = picking_text(request_id)
+    if not request_id or not expected_rows or not lines:
+        raise ValueError("ข้อมูลแก้ไขไม่ครบ กรุณาเปิด Request ใหม่อีกครั้ง")
+    originals = {picking_text(row.get("Line ID")): row for row in expected_rows}
+    if "" in originals or len(originals) != len(expected_rows) or any(
+            picking_text(row.get("Request ID")) != request_id for row in expected_rows):
+        raise ValueError("ข้อมูลอ้างอิง Request ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่")
+    used_ids = set(originals)
+    suffixes = [int(line_id.rsplit("-", 1)[-1]) for line_id in used_ids if line_id.rsplit("-", 1)[-1].isdigit()]
+    next_number = max(suffixes, default=0) + 1
+    payload = []
+    retained_ids = set()
+    for index, line in enumerate(lines, start=1):
+        line_id = picking_text(line.get("Line ID"))
+        if line_id:
+            if line_id not in originals or line_id in retained_ids:
+                raise ValueError("Line ID ซ้ำหรือไม่อยู่ใน Request นี้ กรุณาเปิดแก้ไขใหม่")
+            retained_ids.add(line_id)
+        else:
+            line_id = f"{request_id}-{next_number:03d}"
+            while line_id in used_ids:
+                next_number += 1
+                line_id = f"{request_id}-{next_number:03d}"
+            used_ids.add(line_id)
+            next_number += 1
+        quantity = picking_quantity(line.get("Volume"))
+        if quantity is None or quantity <= 0:
+            raise ValueError(f"รายการที่ {index}: จำนวนต้องเป็นตัวเลขมากกว่า 0")
+        for required in ["Cultivar Name", "Grade", "Consignee", "True Consignee", "Project Owner", "Type"]:
+            if not picking_text(line.get(required)):
+                raise ValueError(f"รายการที่ {index}: กรุณาระบุ {required}")
+        record = {header: picking_text(line.get(header)) for header in PICKING_HEADERS}
+        record.update({
+            "Request ID": request_id, "Line ID": line_id,
+            "Created At": picking_text(originals.get(line_id, expected_rows[0]).get("Created At")),
+            "Grade": picking_text(line.get("Grade")).upper(), "Volume": quantity,
+            "Expected Shipping Date": picking_shipping_date(line.get("Expected Shipping Date")),
+            "Required Category": "FG (Finished Goods)",
+        })
+        payload.append(record)
+    worksheet = spreadsheet.worksheet(PICKING_SHEET_NAME)
+    records = read_picking_records(worksheet)
+    current = [row for row in records if picking_text(row.get("Request ID")) == request_id]
+    already_saved = picking_same_payload(current, payload)
+    if not already_saved:
+        if not picking_same_payload(current, expected_rows):
+            raise ValueError("Request ถูกแก้ไขหรือลบไปแล้ว กรุณายกเลิกการแก้ไขและเปิดข้อมูลล่าสุดอีกครั้ง")
+        headers, requests = picking_schema_requests(worksheet, [str(header).strip() for header in worksheet.row_values(1)])
+        by_id = {picking_text(row.get("Line ID")): row for row in payload}
+        for row in current:
+            requests.extend(picking_owned_cell_updates(
+                worksheet, headers, row["Original_Row_Index"], by_id.get(picking_text(row.get("Line ID"))),
+            ))
+        new_rows = [row for row in payload if row["Line ID"] not in originals]
+        if new_rows:
+            requests.append(picking_append_cells(worksheet, headers, new_rows))
+        try:
+            spreadsheet.batch_update({"requests": requests})
+        except Exception:
+            confirmed = [row for row in read_picking_records(worksheet) if picking_text(row.get("Request ID")) == request_id]
+            if not picking_same_payload(confirmed, payload):
+                raise
+            already_saved = True
+    get_cached_picking_rows.clear()
+    get_cached_data.clear()
+    return {"request_id": request_id, "line_count": len(payload), "already_saved": already_saved}
+
+
+def delete_picking_request(spreadsheet, request_id, expected_rows):
+    request_id = picking_text(request_id)
+    if not request_id or not expected_rows or any(picking_text(row.get("Request ID")) != request_id for row in expected_rows):
+        raise ValueError("ข้อมูลอ้างอิง Request ไม่ถูกต้อง กรุณาเปิดข้อมูลใหม่")
+    try:
+        worksheet = spreadsheet.worksheet(PICKING_SHEET_NAME)
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = None
+    current = [row for row in read_picking_records(worksheet) if picking_text(row.get("Request ID")) == request_id] if worksheet is not None else []
+    already_deleted = not current
+    if current:
+        if not picking_same_payload(current, expected_rows):
+            raise ValueError("Request ถูกแก้ไขแล้ว กรุณายกเลิกการลบและเปิดข้อมูลล่าสุดเพื่อตรวจสอบอีกครั้ง")
+        headers = [str(header).strip() for header in worksheet.row_values(1)]
+        requests = [request for row in current for request in
+                    picking_owned_cell_updates(worksheet, headers, row["Original_Row_Index"])]
+        try:
+            spreadsheet.batch_update({"requests": requests})
+        except Exception:
+            if any(picking_text(row.get("Request ID")) == request_id for row in read_picking_records(worksheet)):
+                raise
+            already_deleted = True
+    get_cached_picking_rows.clear()
+    get_cached_data.clear()
+    return {"request_id": request_id, "line_count": len(expected_rows), "already_deleted": already_deleted}
+
+
+def render_picking_manager(spreadsheet, catalog):
+    manager = st.session_state.get("picking_manage")
+    if not manager:
+        return
+    request_id = manager["request_id"]
+    token = manager["token"]
+    with st.container(border=True, key="picking_management"):
+        if manager["mode"] == "edit":
+            st.markdown(f"**แก้ไข Request: {request_id}**")
+            st.caption("แก้สายพันธุ์ เกรด จำนวน ผู้รับ Project Owner, Type และวันส่งรายรายการได้ เพิ่มหรือลบแถวได้ในตาราง โดยคงหมายเลข Request เดิม")
+            st.caption("วันจัดส่ง: YYYY-MM-DD หรือ DD/MM/YYYY · ใส่ TBC เมื่อยังไม่มีกำหนดส่ง แต่ละรายการเก็บวันส่งแยกกัน")
+            edit_catalog = picking_edit_catalog(catalog, manager["expected"])
+            options = sorted({item["cultivar"] for item in edit_catalog.values()} |
+                             {picking_text(row.get("Cultivar Name")) for row in manager["expected"]
+                              if picking_text(row.get("Cultivar Name"))}, key=str.casefold)
+            records = st.data_editor(
+                manager["editor_input"], width="stretch", hide_index=True, num_rows="dynamic",
+                key=f"picking_manage_editor_{token}",
+                column_config={
+                    "Line ID": None,
+                    "Cultivar Name": st.column_config.SelectboxColumn("สายพันธุ์", options=options, required=True, width="medium"),
+                    "Grade": st.column_config.TextColumn("เกรด FG", required=True, width="small"),
+                    "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%.2f", required=True),
+                    "Consignee": st.column_config.TextColumn("Consignee", required=True, width="medium"),
+                    "True Consignee": st.column_config.TextColumn("True Consignee", required=True, width="medium"),
+                    "Project Owner": st.column_config.TextColumn("Project Owner", required=True, width="medium"),
+                    "Type": st.column_config.TextColumn("Type ผลิตภัณฑ์", required=True, width="medium"),
+                    "Expected Shipping Date": st.column_config.TextColumn("วันจัดส่ง / TBC", required=True, width="medium"),
+                    "Note": st.column_config.TextColumn("หมายเหตุ", width="medium"),
+                },
+            ).to_dict("records")
+            try:
+                lines = prepare_picking_changes(records, catalog, manager["expected"])
+            except ValueError as error:
+                lines = None
+                st.caption(str(error))
+            else:
+                preview = project_picking_rows([dict(line, **{"Request ID": request_id}) for line in lines], catalog)
+                st.markdown("**ความพร้อมหลังแก้ไข เทียบ On hand ปัจจุบัน**")
+                st.dataframe(
+                    format_df_quantity(pd.DataFrame(preview)), width="stretch", hide_index=True,
+                    column_order=["Cultivar Name", "Grade", "Volume", "Supplier Name", "Project Owner", "Type", "Expected Shipping Date", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)"],
+                    column_config={"Cultivar Name": "สายพันธุ์", "Grade": "เกรด FG", "Volume": "จำนวนส่ง",
+                                   "Expected Shipping Date": "วันจัดส่ง / TBC", "Available FG": "FG ตรงเกรด",
+                                   "Available WIP": "WIP รอ Process", "FG Shortfall": "FG ที่ยังขาด"},
+                )
+            save_col, cancel_col = st.columns([2, 1])
+            with save_col:
+                if st.button("บันทึกการแก้ไข", key="picking_update_request", type="primary", width="stretch"):
+                    try:
+                        if lines is None:
+                            lines = prepare_picking_changes(records, catalog, manager["expected"])
+                        with st.spinner("กำลังบันทึกการแก้ไข..."):
+                            result = update_picking_request(spreadsheet, request_id, manager["expected"], lines)
+                    except Exception as error:
+                        st.error(f"ยังยืนยันการแก้ไขไม่ได้: {error}")
+                        st.caption("ข้อมูลที่กรอกยังอยู่ หากการเชื่อมต่อขัดข้องให้กดบันทึกซ้ำด้วยข้อมูลเดิม")
+                    else:
+                        st.session_state["picking_manage_flash"] = f"แก้ไข {request_id} แล้ว · {result['line_count']:,} รายการ"
+                        st.session_state["picking_manage_draft_result"] = result
+                        del st.session_state["picking_manage"]
+                        st.rerun()
+            with cancel_col:
+                if st.button("ยกเลิกการแก้ไข", key="picking_manage_cancel", width="stretch"):
+                    del st.session_state["picking_manage"]
+                    get_cached_picking_rows.clear()
+                    st.rerun()
+        else:
+            st.markdown(f"**ลบ Request: {request_id}**")
+            volume = sum(picking_quantity(row.get("Volume")) or 0 for row in manager["expected"])
+            st.warning(f"จะลบทั้งคำขอ {len(manager['expected']):,} รายการ รวม Volume {volume:,.2f} และนำรายการเหล่านี้ออกจาก Delivery Issue การลบไม่สามารถย้อนกลับได้")
+            confirmed = st.checkbox(f"ยืนยันว่าต้องการลบ {request_id}", key=f"picking_delete_confirm_{token}")
+            delete_col, cancel_col = st.columns([2, 1])
+            with delete_col:
+                if st.button("ยืนยันลบ Request", key="picking_confirm_delete", type="primary", disabled=not confirmed, width="stretch"):
+                    try:
+                        with st.spinner("กำลังลบ Picking Request..."):
+                            result = delete_picking_request(spreadsheet, request_id, manager["expected"])
+                    except Exception as error:
+                        st.error(f"ยังยืนยันการลบไม่ได้: {error}")
+                    else:
+                        st.session_state["picking_manage_flash"] = f"ลบ {request_id} และนำรายการออกจาก Delivery Issue แล้ว"
+                        st.session_state["picking_manage_draft_result"] = dict(result, deleted=True)
+                        del st.session_state["picking_manage"]
+                        st.rerun()
+            with cancel_col:
+                if st.button("ยกเลิกการลบ", key="picking_manage_cancel", width="stretch"):
+                    del st.session_state["picking_manage"]
+                    get_cached_picking_rows.clear()
+                    st.rerun()
+
+
 def find_delivery_column(columns, field):
     aliases = {
         "Cultivar Name": ["Cultivar Name", "Cultivar", "Cultivar / Product", "Product", "ชื่อ"],
         "Grade": ["Grade", "Size"],
         "Consignee": ["Consignee", "Consignee (ปลายทาง)"],
         "True Consignee": ["True Consignee", "True_Consignee", "True Consignee (ปลายทางจริง)"],
+        "Supplier Name": ["Supplier Name", "Supplier"],
+        "Project Owner": ["Project Owner", "Project_Owner", "Project owner"],
+        "Type": ["Type", "Product Type", "Type ผลิตภัณฑ์"],
         "Expected Shipping Date": ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date"],
     }
     if field in {"Volume", "Available FG", "Available WIP"}:
@@ -513,7 +864,7 @@ def merge_delivery_requests(legacy_records, picking_records, catalog):
     rows = [dict(row, _Delivery_Source="legacy") for row in legacy_records]
     mappings = {field: find_delivery_column(columns, field) for field in [
         "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee",
-        "Expected Shipping Date", "Available FG", "Available WIP",
+        "Expected Shipping Date", "Available FG", "Available WIP", "Project Owner", "Type", "Supplier Name",
     ]}
     for record in project_picking_rows(picking_records, catalog):
         row = {mappings.get(key, key): value for key, value in record.items()}
@@ -524,6 +875,7 @@ def merge_delivery_requests(legacy_records, picking_records, catalog):
 
 def update_delivery_dates(spreadsheet, targets, new_value):
     grouped = {}
+    live_picking = {}
     for target in targets:
         worksheet = target["worksheet"]
         headers = [str(header).strip() for header in worksheet.row_values(1)]
@@ -531,6 +883,17 @@ def update_delivery_dates(spreadsheet, targets, new_value):
         if date_header not in headers:
             raise ValueError(f"ไม่พบคอลัมน์ {date_header} ใน {worksheet.title}")
         row_number = int(target["row_idx"])
+        if target.get("line_id"):
+            if worksheet.title not in live_picking:
+                live_picking[worksheet.title] = read_picking_records(worksheet)
+            matches = [row for row in live_picking[worksheet.title]
+                       if picking_text(row.get("Line ID")) == picking_text(target["line_id"])
+                       and picking_text(row.get("Request ID")) == picking_text(target.get("request_id"))]
+            if len(matches) != 1:
+                raise ValueError("รายการ Picking ถูกเปลี่ยนหรือลบแล้ว กรุณาโหลด Delivery Issue ใหม่")
+            row_number = matches[0]["Original_Row_Index"]
+            if "expected_date" in target and picking_text(matches[0].get("Expected Shipping Date")) != picking_text(target["expected_date"]):
+                raise ValueError("วันส่งรายการนี้ถูกแก้ไขแล้ว กรุณาโหลด Delivery Issue ใหม่")
         if row_number < 2:
             raise ValueError("เลขแถวรายการไม่ถูกต้อง")
         group = grouped.setdefault(worksheet.title, {"worksheet": worksheet, "cells": []})
@@ -794,7 +1157,9 @@ if menu == "🚨 Delivery Issue":
         if date_col not in df_del.columns:
             date_col = None
 
-        delivery_internal_columns = ["Original_Row_Index", "Is_Unscheduled", "Parsed_Delivery_Date", "_Delivery_Source"]
+        delivery_internal_columns = ["Original_Row_Index", "Is_Unscheduled", "Parsed_Delivery_Date", "_Delivery_Source",
+                                     "Request ID", "Line ID", "Created At", "Export Name", "Source Categories",
+                                     "Required Category", "Note", "Request Demand", "FG Shortfall"]
         if date_col:
             df_del[date_col] = df_del[date_col].astype(str).str.strip()
             df_del["Is_Unscheduled"] = df_del[date_col].str.casefold().isin(DELIVERY_PENDING_VALUES)
@@ -865,7 +1230,9 @@ if menu == "🚨 Delivery Issue":
                         if row_source == "picking":
                             disp_txt += f" | Request: {r['Request ID']}"
                         reschedule_opts.append(disp_txt)
-                        reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt, "source": row_source}
+                        reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt, "source": row_source,
+                                                    "line_id": picking_text(r.get("Line ID")) if row_source == "picking" else "",
+                                                    "request_id": picking_text(r.get("Request ID")) if row_source == "picking" else ""}
 
                     selected_items = st.multiselect(
                         "เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts,
@@ -904,6 +1271,8 @@ if menu == "🚨 Delivery Issue":
                                     targets.append({
                                         "worksheet": target_sheet, "row_idx": target_row,
                                         "date_header": "Expected Shipping Date" if is_picking else date_col,
+                                        "line_id": item["line_id"], "request_id": item["request_id"],
+                                        "expected_date": item["curr_date"],
                                     })
                                     success_rows.append(f"{target_sheet.title} แถว {target_row}")
                                 update_delivery_dates(sh, targets, new_value)
@@ -995,6 +1364,10 @@ elif menu == "📋 Picking Request":
                 del st.session_state[state_key]
         st.session_state["picking_draft_epoch"] = next_epoch
 
+    managed_result = st.session_state.pop("picking_manage_draft_result", None)
+    if managed_result and managed_result["request_id"] == st.session_state.get("picking_draft_request_id"):
+        reset_picking_draft()
+
     epoch = int(st.session_state.get("picking_draft_epoch", 0))
     if "picking_draft_request_id" not in st.session_state:
         created_at = datetime.now(ZoneInfo("Asia/Bangkok"))
@@ -1017,6 +1390,20 @@ elif menu == "📋 Picking Request":
     )
     catalog_by_name = {item["cultivar"]: item for item in catalog.values()}
     cultivar_options = sorted(catalog_by_name, key=str.casefold)
+    # Widget state is cleaned when another module renders. Keep the draft in
+    # ordinary session state and restore missing widgets before creating them.
+    draft_fields = st.session_state.get("picking_draft_fields", {})
+    for field_name in ["consignee", "true_consignee", "project_owner", "type", "tbc", "date", "cultivars"]:
+        widget_key = f"picking_draft_{epoch}_{field_name}"
+        if widget_key not in st.session_state and field_name in draft_fields:
+            st.session_state[widget_key] = draft_fields[field_name]
+    st.session_state.setdefault(f"picking_draft_{epoch}_tbc", True)
+    st.session_state.setdefault(f"picking_draft_{epoch}_date", datetime.now(ZoneInfo("Asia/Bangkok")).date())
+    selection_key = f"picking_draft_{epoch}_cultivars"
+    restored_selection = st.session_state.get(selection_key, [])
+    valid_selection = [name for name in restored_selection if name in catalog_by_name]
+    if valid_selection != restored_selection:
+        st.session_state[selection_key] = valid_selection
     render_section_heading(
         "สร้างคำขอจัดส่ง FG", "กำหนดผู้รับและวันส่งร่วมกัน แล้วแก้จำนวน เกรด และผู้รับแยกแต่ละรายการได้",
         eyebrow="NEW PICKING REQUEST", tone="blue",
@@ -1033,15 +1420,21 @@ elif menu == "📋 Picking Request":
                 "True Consignee เริ่มต้น", key=f"picking_draft_{epoch}_true_consignee", disabled=draft_saved,
                 help="ใช้กับรายการที่เว้น True Consignee ในตารางไว้ สามารถแก้แยกแต่ละรายการได้",
             )
+        owner_col, type_col = st.columns(2)
+        with owner_col:
+            default_project_owner = st.text_input("Project Owner (ค่าเริ่มต้น)", key=f"picking_draft_{epoch}_project_owner", disabled=draft_saved)
+        with type_col:
+            default_type = st.selectbox("Type ผลิตภัณฑ์ (ค่าเริ่มต้น)", PICKING_TYPES, index=None, placeholder="เลือก Type ผลิตภัณฑ์", key=f"picking_draft_{epoch}_type", disabled=draft_saved)
+        st.caption("Supplier ดึงจาก WIP / FG ของสายพันธุ์ที่เลือกโดยอัตโนมัติ หากมีหลาย Supplier จะแสดงชื่อทั้งหมด และไม่มีการจอง Lot")
         date_left, date_right = st.columns(2)
         with date_left:
             request_tbc = st.checkbox(
-                "TBC — ยังไม่กำหนดวันจัดส่ง", key=f"picking_draft_{epoch}_tbc", value=True,
+                "TBC — ยังไม่กำหนดวันจัดส่ง", key=f"picking_draft_{epoch}_tbc",
                 disabled=draft_saved,
             )
         with date_right:
             request_date = st.date_input(
-                "วันจัดส่ง", value=datetime.now(ZoneInfo("Asia/Bangkok")).date(),
+                "วันจัดส่ง", value="today",
                 key=f"picking_draft_{epoch}_date", disabled=draft_saved or request_tbc,
             )
         shipping_date = "TBC" if request_tbc else request_date.isoformat() if request_date else ""
@@ -1050,19 +1443,27 @@ elif menu == "📋 Picking Request":
             format_func=lambda name: f"{name} · {' / '.join(catalog_by_name[name]['sources'])}",
             key=f"picking_draft_{epoch}_cultivars", disabled=draft_saved,
         )
+        st.session_state["picking_draft_fields"] = {
+            "consignee": default_consignee, "true_consignee": default_true_consignee,
+            "project_owner": default_project_owner, "type": default_type,
+            "tbc": request_tbc, "date": request_date, "cultivars": list(selected_cultivars),
+        }
         st.caption("กรอกเกรด FG ที่ต้องส่ง เช่น BIG / SMALL / MIX / F และจำนวนที่ต้องการ ผู้รับที่เว้นว่างจะใช้ค่าเริ่มต้นด้านบน")
-        editor_columns = ["Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Note"]
+        editor_columns = ["Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Note"]
         selected_tuple = tuple(selected_cultivars)
-        if st.session_state.get("picking_draft_selection") != selected_tuple:
+        active_editor_key = f"picking_draft_{epoch}_editor_{st.session_state.get('picking_draft_editor_version', 0)}"
+        editor_needs_restore = bool(selected_cultivars) and active_editor_key not in st.session_state
+        selection_changed = st.session_state.get("picking_draft_selection") != selected_tuple
+        if selection_changed or editor_needs_restore:
             previous_lines = st.session_state.get("picking_draft_lines", [])
             editor_rows = [dict(row) for row in previous_lines if row.get("Cultivar Name") in selected_cultivars]
             existing_cultivars = {row.get("Cultivar Name") for row in editor_rows}
             for cultivar in selected_cultivars:
-                if cultivar not in existing_cultivars:
+                if selection_changed and cultivar not in existing_cultivars:
                     fg_grades = list(catalog_by_name[cultivar]["fg_by_grade"])
                     editor_rows.append({
                         "Cultivar Name": cultivar, "Grade": fg_grades[0] if len(fg_grades) == 1 else "",
-                        "Volume": 0.0, "Consignee": "", "True Consignee": "", "Note": "",
+                        "Volume": 0.0, "Consignee": "", "True Consignee": "", "Project Owner": "", "Type": "", "Note": "",
                     })
             st.session_state["picking_draft_editor_input"] = pd.DataFrame(editor_rows, columns=editor_columns)
             st.session_state["picking_draft_editor_version"] = int(st.session_state.get("picking_draft_editor_version", 0)) + 1
@@ -1079,6 +1480,8 @@ elif menu == "📋 Picking Request":
                     "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%.2f", required=True),
                     "Consignee": st.column_config.TextColumn("Consignee", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
                     "True Consignee": st.column_config.TextColumn("True Consignee", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
+                    "Project Owner": st.column_config.TextColumn("Project Owner", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
+                    "Type": st.column_config.TextColumn("Type ผลิตภัณฑ์", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
                     "Note": st.column_config.TextColumn("หมายเหตุ", width="medium"),
                 },
             )
@@ -1091,7 +1494,7 @@ elif menu == "📋 Picking Request":
         if edited_records:
             try:
                 preview_lines = prepare_picking_lines(
-                    edited_records, catalog, default_consignee or "—", default_true_consignee or "—",
+                    edited_records, catalog, default_consignee or "—", default_true_consignee or "—", default_project_owner or "—", default_type or "—",
                 )
                 preview_rows = project_picking_rows([
                     dict(line, **{"Request ID": request_id, "Expected Shipping Date": shipping_date})
@@ -1103,7 +1506,7 @@ elif menu == "📋 Picking Request":
                 st.markdown("**ความพร้อมตาม On hand ปัจจุบัน**")
                 st.dataframe(
                     format_df_quantity(pd.DataFrame(preview_rows)), width="stretch", hide_index=True,
-                    column_order=["Cultivar Name", "Grade", "Volume", "Request Demand", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)"],
+                    column_order=["Cultivar Name", "Grade", "Volume", "Supplier Name", "Project Owner", "Type", "Request Demand", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)"],
                     column_config={
                         "Cultivar Name": st.column_config.TextColumn("สายพันธุ์", width="medium"),
                         "Grade": "เกรด FG", "Volume": "จำนวนส่ง", "Request Demand": "ยอดรวม Request / เกรด",
@@ -1117,7 +1520,7 @@ elif menu == "📋 Picking Request":
             try:
                 if not shipping_date:
                     raise ValueError("กรุณาระบุวันจัดส่งหรือเลือก TBC")
-                lines_to_save = prepare_picking_lines(edited_records, catalog, default_consignee, default_true_consignee)
+                lines_to_save = prepare_picking_lines(edited_records, catalog, default_consignee, default_true_consignee, default_project_owner, default_type)
                 with st.spinner("กำลังบันทึก Picking Request..."):
                     result = save_picking_request(
                         sh, request_id, st.session_state["picking_draft_created_at"], lines_to_save, shipping_date,
@@ -1127,6 +1530,7 @@ elif menu == "📋 Picking Request":
                 st.caption("คำขอยังคงใช้หมายเลขเดิม หากการเชื่อมต่อขัดข้องให้กดบันทึกซ้ำโดยไม่แก้ข้อมูล ระบบจะตรวจคำขอเดิมก่อนเพื่อป้องกันรายการซ้ำ")
             else:
                 st.session_state["picking_draft_saved"] = result
+                st.session_state["picking_history_request"] = request_id
                 get_cached_data.clear()
                 get_cached_picking_rows.clear()
                 st.rerun()
@@ -1135,6 +1539,8 @@ elif menu == "📋 Picking Request":
         "ติดตาม Picking Request", "แสดงคำขอที่สร้างแล้ว พร้อมเทียบสต็อก FG ปัจจุบัน ส่วนรายการ Delivery เดิมยังคงแสดงใน Delivery Issue",
         eyebrow="REQUEST HISTORY", tone="blue",
     )
+    if "picking_manage_flash" in st.session_state:
+        st.success(st.session_state.pop("picking_manage_flash"))
     try:
         _, picking_history_rows = load_picking_requests(sh)
         projected_history = project_picking_rows(picking_history_rows, catalog)
@@ -1144,11 +1550,11 @@ elif menu == "📋 Picking Request":
         if projected_history:
             request_ids = list(dict.fromkeys(str(row.get("Request ID", "")) for row in projected_history if row.get("Request ID")))
             request_ids.reverse()
-            history_id = st.selectbox("เลือก Request เพื่อดูรายละเอียด", request_ids, key="picking_history_request")
+            history_id = st.selectbox("เลือก Request เพื่อดูรายละเอียด", request_ids, key="picking_history_request", disabled=bool(st.session_state.get("picking_manage")))
             selected_history = [row for row in projected_history if str(row.get("Request ID", "")) == history_id]
             st.dataframe(
                 format_df_quantity(pd.DataFrame(selected_history)), width="stretch", hide_index=True,
-                column_order=["Request ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Expected Shipping Date", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)", "Required Category", "Source Categories", "Note"],
+                column_order=["Request ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Supplier Name", "Expected Shipping Date", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)", "Required Category", "Source Categories", "Note"],
                 column_config={
                     "Original_Row_Index": None, "Line ID": None,
                     "Cultivar Name": "สายพันธุ์", "Grade": "เกรด FG", "Volume": "จำนวนส่ง",
@@ -1157,8 +1563,34 @@ elif menu == "📋 Picking Request":
                     "Required Category": "ประเภทที่จัดส่ง", "Source Categories": "แหล่งอ้างอิง",
                 },
             )
+            edit_col, delete_col = st.columns(2)
+            with edit_col:
+                edit_clicked = st.button("แก้ไข Request", key="picking_edit_request", disabled=bool(st.session_state.get("picking_manage")), width="stretch")
+            with delete_col:
+                delete_clicked = st.button("ลบ Request", key="picking_delete_request", disabled=bool(st.session_state.get("picking_manage")), width="stretch")
+            if edit_clicked or delete_clicked:
+                try:
+                    current_rows = [row for row in read_picking_records(sh.worksheet(PICKING_SHEET_NAME))
+                                    if picking_text(row.get("Request ID")) == history_id]
+                    if not current_rows:
+                        raise ValueError("ไม่พบ Request นี้แล้ว กรุณาโหลดข้อมูลใหม่")
+                    edit_columns = ["Line ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Expected Shipping Date", "Note"]
+                    editor_rows = [{column: row.get(column, "") for column in edit_columns} for row in current_rows]
+                    for row in editor_rows:
+                        row["Volume"] = picking_quantity(row["Volume"])
+                    st.session_state["picking_manage"] = {
+                        "request_id": history_id, "mode": "edit" if edit_clicked else "delete",
+                        "expected": current_rows, "token": uuid4().hex[:12],
+                        "editor_input": pd.DataFrame(editor_rows, columns=edit_columns),
+                    }
+                    get_cached_picking_rows.clear()
+                except Exception as error:
+                    st.error(f"เปิดข้อมูล Request ไม่สำเร็จ: {error}")
+                else:
+                    st.rerun()
         else:
             st.caption("ยังไม่มี Picking Request เมื่อสร้างคำขอใหม่ รายการจะแสดงที่นี่และใน Delivery Issue")
+    render_picking_manager(sh, catalog)
 
 # ==========================================
 # หน้าที่ 2: Stock Summary & Details
