@@ -88,7 +88,6 @@ def init_google_sheets(sheet_name):
             ws.append_row(headers, table_range="A1")
         return ws
 
-    # แทรก Supplier Name เข้าไปเป็นตำแหน่งที่ 3 (Index 2)
     packing_records_sheet = get_or_create_worksheet(
         "Packing_Records", "1000", "15", 
         ["Timestamp", "Source WIP Lot", "Supplier Name", "Cultivar Name", "Export Name", "Generated FG Lot No.", "Grade", "Quantity", "Waste Qty", "Packing Date", "Note"]
@@ -101,6 +100,11 @@ def init_google_sheets(sheet_name):
         "Shipped_Out_Log", "1000", "12", 
         ["Timestamp", "Category", "Lot No.", "Cultivar / Product", "Grade", "Shipped Qty", "Consignee (ปลายทาง)", "Client (ลูกค้า)", "Shipping Reason", "Shipment Date", "Note"]
     )
+    # เพิ่ม Sheet สำหรับเก็บประวัติการปรับยอด Adjustment
+    adjustment_log_sheet = get_or_create_worksheet(
+        "Adjustment_Log", "1000", "8",
+        ["Timestamp", "Source", "Lot No.", "Product Name", "Old Quantity", "New Quantity", "Reason", "Adjusted Date"]
+    )
 
     EXPECTED_HEADERS = [
         "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
@@ -111,9 +115,9 @@ def init_google_sheets(sheet_name):
     if not current_headers or len(current_headers) < len(EXPECTED_HEADERS):
         main_sheet.update(range_name="A1:P1", values=[EXPECTED_HEADERS])
         
-    return client, sh, main_sheet, packing_records_sheet, packing_log_sheet, shipped_sheet
+    return client, sh, main_sheet, packing_records_sheet, packing_log_sheet, shipped_sheet, adjustment_log_sheet
 
-client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet = init_google_sheets(SHEET_NAME)
+client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet, adjustment_sheet = init_google_sheets(SHEET_NAME)
 
 # ==========================================
 # 4. ฟังก์ชันตัวช่วย (Helper Functions)
@@ -123,7 +127,6 @@ def clean_quantity(val):
     except: return 0.0
 
 DELIVERY_PENDING_VALUES = {"tbc", "to be confirmed", "tbd", "to be decided", "", "nan", "nat", "none"}
-
 
 def parse_delivery_date(value):
     text = str(value).strip()
@@ -135,43 +138,33 @@ def parse_delivery_date(value):
         parsed = pd.to_datetime(text, dayfirst=True, errors="coerce")
     return pd.Timestamp(parsed.date()) if pd.notna(parsed) else pd.NaT
 
-
 def format_df_quantity(df):
     if df is not None and not df.empty:
         df_copy = df.copy()
         for col in df_copy.columns:
             col_str = str(col).lower()
             
-            # ✨ 1. จัดการ Format วันที่แบบขั้นสูง (ดักจับและแก้ปัญหาวัน/เดือนสลับกัน)
+            # ✨ 1. จัดการ Format วันที่แบบขั้นสูง
             date_keywords = ["date", "วันที่", "timestamp"]
             if any(k in col_str for k in date_keywords):
                 def format_date(x):
                     if pd.isna(x) or str(x).strip().casefold() in DELIVERY_PENDING_VALUES:
                         return x
                     try:
-                        d_str = str(x).strip().split(" ")[0] # ตัดเวลาทิ้งก่อนเอามาวิเคราะห์
-                        
+                        d_str = str(x).strip().split(" ")[0]
                         import re
-                        # กรณี 1: ขึ้นต้นด้วยปี (เช่น 2026-10-24 หรือ 2026/10/24)
                         if re.match(r'^\d{4}[-/]\d{1,2}[-/]\d{1,2}$', d_str):
                             dt = pd.to_datetime(d_str)
-                        
-                        # กรณี 2: ขึ้นต้นด้วยวันหรือเดือน (เช่น 24/10/2026 หรือ 10/24/2026)
                         elif re.match(r'^\d{1,2}[-/]\d{1,2}[-/]\d{4}$', d_str):
                             parts = re.split(r'[-/]', d_str)
                             p1, p2, p3 = int(parts[0]), int(parts[1]), int(parts[2])
-                            
                             if p1 > 12: 
-                                # ตัวเลขแรกเกิน 12 แปลว่าวันขึ้นก่อนแน่นอน (DD/MM/YYYY)
                                 dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
                             elif p2 > 12: 
-                                # ตัวเลขที่สองเกิน 12 แปลว่าเดือนขึ้นก่อนแน่นอน (MM/DD/YYYY)
                                 dt = pd.to_datetime(f"{p3}-{p1:02d}-{p2:02d}")
                             else:
-                                # ถ้าคลุมเครือ (เช่น 05/06/2026) ให้ยึด DD/MM/YYYY เป็นมาตรฐานไทย
                                 dt = pd.to_datetime(f"{p3}-{p2:02d}-{p1:02d}")
                         else:
-                            # กรณีอื่นๆ ที่รูปแบบแปลกไป ให้ Pandas ลองเดา
                             dt = pd.to_datetime(d_str, dayfirst=True, errors='coerce')
                         
                         if pd.notna(dt):
@@ -336,7 +329,6 @@ def render_portal_ui_styles():
     }
     </style>""", unsafe_allow_html=True)
 
-
 def render_section_heading(title, description, eyebrow="", tone="blue"):
     if tone not in {"blue", "slate", "amber", "teal"}:
         tone = "blue"
@@ -346,7 +338,6 @@ def render_section_heading(title, description, eyebrow="", tone="blue"):
         f'<h2>{escape(title)}</h2><p>{escape(description)}</p></header>',
         unsafe_allow_html=True,
     )
-
 
 def render_grade_summary(stock_df, total, stock_type):
     grade_names = stock_df["Grade"].astype(str).str.strip().str.upper()
@@ -369,9 +360,10 @@ def render_grade_summary(stock_df, total, stock_type):
 # ==========================================
 st.sidebar.title("🌱 Thai Stick Trading")
 st.sidebar.markdown("---")
+# ✨ เพิ่ม 🔧 Adjustment Module
 menu = st.sidebar.radio(
     "เลือกเมนูการใช้งาน",
-    ["🚨 Delivery Issue", "📊 Stock Summary & Details", "📈 Monthly Report", "📝 Trading Goods Registration", "✏️ Edit Registration", "📦 Packing Module", "🚚 Shipped Out Module"],
+    ["🚨 Delivery Issue", "📊 Stock Summary & Details", "📈 Monthly Report", "📝 Trading Goods Registration", "✏️ Edit Registration", "🔧 Adjustment Module", "📦 Packing Module", "🚚 Shipped Out Module"],
 )
 st.sidebar.markdown("---")
 st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing (Pastel Theme)")
@@ -614,6 +606,7 @@ if menu == "🚨 Delivery Issue":
     else:
         st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule'")
 
+
 # ==========================================
 # หน้าที่ 2: Stock Summary & Details
 # ==========================================
@@ -689,9 +682,6 @@ elif menu == "📊 Stock Summary & Details":
             '</div></div>', unsafe_allow_html=True,
         )
 
-        from html import escape
-
-        # ใช้สีและรูปแบบเฉพาะ Matrix เพื่อแยก WIP / FG อย่างชัดเจน
         st.markdown("""<style>
         .stock-matrix { --accent: #b45309; --deep: #92400e; --tint: #fffbeb;
             --soft: #fef3c7; --line: #fde68a; --rgb: 217, 119, 6;
@@ -870,6 +860,7 @@ elif menu == "📊 Stock Summary & Details":
                     st.markdown(f'<div class="portal-empty">ยังไม่มีรายการสินค้า {stock_type} คงเหลือในขณะนี้</div>', unsafe_allow_html=True)
     else:
         st.markdown('<div class="portal-empty">ยังไม่มีข้อมูลสต็อกในระบบ เมื่อบันทึกรับสินค้าแล้ว ยอดคงเหลือจะแสดงที่หน้านี้</div>', unsafe_allow_html=True)
+
 # ==========================================
 # หน้าที่ 3: Monthly Report
 # ==========================================
@@ -1122,7 +1113,6 @@ elif menu == "📝 Trading Goods Registration":
             sheet.append_row(values=row_to_insert, value_input_option='USER_ENTERED')
             get_cached_data.clear()
             
-            # ✨ เพิ่มส่วนนี้: ล้างค่า Checkbox 'To be decided' ที่ค้างใน Session State ทิ้ง
             keys_to_clear = ["reg_tbd_insp", "reg_insp", "reg_tbd_ir", "reg_ir", "reg_tbd_ship", "reg_ship", "reg_tbd_type", "reg_type", "reg_rec_dt"]
             for k in keys_to_clear:
                 if k in st.session_state:
@@ -1210,7 +1200,6 @@ elif menu == "✏️ Edit Registration":
 
                         old_insp = str(current_data.get("Inspection Req.", "No"))
                         insp_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_insp = st.checkbox("To be decided", value=(old_insp == "To be decided"), key=f"edit_tbd_insp_{matched_row_idx}")
                         insp_opts = ["Yes", "No"]
                         e_insp_val = insp_con.selectbox("10. Inspection Req.", insp_opts, index=insp_opts.index(old_insp) if old_insp in insp_opts else 0, disabled=e_is_tbd_insp, key=f"edit_insp_{matched_row_idx}")
@@ -1218,7 +1207,6 @@ elif menu == "✏️ Edit Registration":
 
                         old_ir = str(current_data.get("IR Req.", "No"))
                         ir_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_ir = st.checkbox("To be decided", value=(old_ir == "To be decided"), key=f"edit_tbd_ir_{matched_row_idx}")
                         ir_opts = ["Yes", "No"]
                         e_ir_val = ir_con.selectbox("11. IR Req.", ir_opts, index=ir_opts.index(old_ir) if old_ir in ir_opts else 0, disabled=e_is_tbd_ir, key=f"edit_ir_{matched_row_idx}")
@@ -1226,7 +1214,6 @@ elif menu == "✏️ Edit Registration":
 
                         old_date = str(current_data.get("Shipment date", ""))
                         ship_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_ship = st.checkbox("To be decided", value=(old_date == "To be decided"), key=f"edit_tbd_ship_{matched_row_idx}")
                         try: default_dt = pd.to_datetime(old_date, dayfirst=True).date() if old_date != "To be decided" and old_date.strip() else date.today()
                         except: default_dt = date.today()
@@ -1235,7 +1222,6 @@ elif menu == "✏️ Edit Registration":
 
                         old_type = str(current_data.get("Type", ""))
                         type_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
                         e_is_tbd_type = st.checkbox("To be decided", value=(old_type == "To be decided"), key=f"edit_tbd_type_{matched_row_idx}")
                         type_opts = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product"]
                         e_type_val = type_con.selectbox("13. Type", type_opts, index=type_opts.index(old_type) if old_type in type_opts else 0, disabled=e_is_tbd_type, key=f"edit_type_{matched_row_idx}")
@@ -1269,6 +1255,100 @@ elif menu == "✏️ Edit Registration":
                         st.rerun()
     else:
         st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
+
+# ==========================================
+# หน้าที่ 5.5: 🔧 Adjustment Module (ใหม่)
+# ==========================================
+elif menu == "🔧 Adjustment Module":
+    st.title("🔧 Adjustment Module (WIP & FG)")
+    st.markdown("ใช้สำหรับปรับแก้ตัวเลขยอด WIP และ FG ในกรณีที่ลงข้อมูลผิดพลาดหรือยอดไม่ตรงกับหน้างานจริง")
+
+    # ดึงข้อมูลจากชีตหลัก
+    data_main = get_cached_data("main", sheet)
+    df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
+    
+    # ดึงข้อมูลจากชีตที่แพ็กแล้ว
+    records_data = get_cached_data("packing", packing_records_sheet)
+    df_packing_fg = pd.DataFrame(records_data) if records_data else pd.DataFrame()
+
+    adj_options = []
+    adj_map = {}
+
+    if not df_main.empty:
+        df_main.columns = [str(c).strip() for c in df_main.columns]
+        df_main["Original_Row_Index"] = df_main.index + 2
+        df_main["Clean_Qty"] = df_main["Quantity"].apply(clean_quantity) if "Quantity" in df_main.columns else 0.0
+        
+        for _, r in df_main.iterrows():
+            lot_no = str(r.get("THAI STICK Lot. No.", "")).strip() or str(r.get("Supplier Lot. No.", "")).strip() or "No-Lot"
+            cat = str(r.get("Category", ""))
+            prod_name = str(r.get("Cultivar Name", ""))
+            grade_val = str(r.get("Grade", ""))
+            qty = float(r["Clean_Qty"])
+            
+            disp = f"[Main - {cat}] Lot: {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {qty:,.2f}"
+            adj_options.append(disp)
+            adj_map[disp] = {
+                "source": "main", "row_idx": r["Original_Row_Index"], 
+                "lot_no": lot_no, "current_qty": qty, "product": prod_name
+            }
+
+    if not df_packing_fg.empty:
+        df_packing_fg.columns = [str(c).strip() for c in df_packing_fg.columns]
+        df_packing_fg["Original_Row_Index"] = df_packing_fg.index + 2
+        df_packing_fg["Clean_Qty"] = df_packing_fg["Quantity"].apply(clean_quantity) if "Quantity" in df_packing_fg.columns else 0.0
+        
+        for _, r in df_packing_fg.iterrows():
+            lot_no = str(r.get("Generated FG Lot No.", "")).strip() or str(r.get("THAI STICK Lot. No.", "")).strip()
+            prod_name = str(r.get("Export Name", ""))
+            grade_val = str(r.get("Grade", ""))
+            qty = float(r["Clean_Qty"])
+            
+            disp = f"[Packed FG] Lot: {lot_no} | {prod_name} | Grade: {grade_val} | Qty: {qty:,.2f}"
+            adj_options.append(disp)
+            adj_map[disp] = {
+                "source": "packing_records", "row_idx": r["Original_Row_Index"],
+                "lot_no": lot_no, "current_qty": qty, "product": prod_name
+            }
+
+    selected_item = st.selectbox("🔍 เลือกรายการที่ต้องการปรับแก้ยอด (ค้นหาได้)", ["-- กรุณาเลือก --"] + adj_options)
+    
+    if selected_item != "-- กรุณาเลือก --":
+        info = adj_map[selected_item]
+        with st.form("adjustment_form"):
+            st.info(f"**กำลังปรับแก้ยอดของ:** {selected_item}")
+            new_qty = st.number_input("จำนวนยอดที่ถูกต้อง (New Quantity)", min_value=0.0, step=0.1, value=float(info["current_qty"]))
+            remark = st.text_input("เหตุผลในการปรับยอด (Reason for adjustment)", placeholder="ระบุเหตุผล เช่น คีย์ผิด, ยอดไม่ตรงจริง")
+            
+            if st.form_submit_button("💾 ยืนยันการปรับแก้ยอด"):
+                try:
+                    if info["source"] == "main":
+                        headers = [str(h).strip() for h in sheet.row_values(1)]
+                        qty_idx = headers.index("Quantity") + 1 if "Quantity" in headers else None
+                        if qty_idx:
+                            sheet.update_cell(info["row_idx"], qty_idx, new_qty)
+                        else:
+                            st.error("ไม่พบคอลัมน์ 'Quantity' ในชีตหลัก")
+                            st.stop()
+                            
+                    elif info["source"] == "packing_records":
+                        headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
+                        qty_idx = headers.index("Quantity") + 1 if "Quantity" in headers else 8
+                        packing_records_sheet.update_cell(info["row_idx"], qty_idx, new_qty)
+
+                    # บันทึกลง Log
+                    log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    adjustment_sheet.append_row([
+                        log_time, info["source"], info["lot_no"], info["product"], 
+                        info["current_qty"], new_qty, remark, str(date.today())
+                    ], value_input_option='USER_ENTERED')
+                        
+                    get_cached_data.clear()
+                    st.success(f"✅ ปรับแก้ยอด Lot: {info['lot_no']} จากเดิม {info['current_qty']} เป็น {new_qty} สำเร็จเรียบร้อยแล้ว!")
+                    time.sleep(1.5)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ เกิดข้อผิดพลาด: {e}")
 
 # ==========================================
 # หน้าที่ 6: Packing Module
@@ -1316,7 +1396,6 @@ elif menu == "📦 Packing Module":
                     qty = float(r["Clean_Qty"])
                     row_idx = r["Original_Row_Index"]
                     
-                    # ✨ ดึง Supplier Name
                     supplier_name = str(r.get("Supplier Name", "")).strip()
                     if not supplier_name: supplier_name = "ไม่ระบุ"
                     
@@ -1394,15 +1473,12 @@ elif menu == "📦 Packing Module":
                                 st.warning(f"⚠️ คำเตือน: ผลผลิตรวม ({total_packed_output + waste_qty:,.2f}) มากกว่าจำนวนที่เบิกมาทั้งหมด ({total_withdraw:,.2f})")
                             else:
                                 with st.spinner("⏳ กำลังบันทึกข้อมูล..."):
-                                    latest_headers = [
-                                        "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
-                                        "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
-                                        "Shipment date", "Type", "Status", "Packing date"
-                                    ]
-                                    col_end_letter = chr(64 + len(latest_headers)).upper()
+                                    # ✨ แก้ไขปัญหาอัปเดตลงผิดคอลัมน์ โดยดึง Header จริงจาก Sheet ปัจจุบันมาใช้
+                                    sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
+                                    col_end_letter = chr(64 + len(sheet_headers)).upper()
                                     
                                     combined_source_lots = [] 
-                                    combined_suppliers = [] # ✨ เก็บชื่อ Supplier
+                                    combined_suppliers = []
                                     
                                     for disp, w_qty in wip_withdrawals.items():
                                         if w_qty > 0:
@@ -1415,25 +1491,30 @@ elif menu == "📦 Packing Module":
                                             if supplier not in combined_suppliers:
                                                 combined_suppliers.append(supplier)
                                             
-                                            r_dict = info["row_data"]
+                                            # ✨ ดึงค่า row เดิมจาก Sheet มาเตรียมอัปเดต
+                                            current_row_values = sheet.row_values(row_idx)
+                                            while len(current_row_values) < len(sheet_headers):
+                                                current_row_values.append("")
+                                            
+                                            r_dict = {sheet_headers[i]: current_row_values[i] for i in range(len(sheet_headers))}
+                                            
                                             remaining_wip = info["qty"] - w_qty
                                             new_status = "Packing done" if remaining_wip <= 0 else "Pending Packing"
                                             remaining_wip = max(0.0, remaining_wip)
                                             
-                                            r_dict["Quantity"] = float(remaining_wip)
+                                            r_dict["Quantity"] = str(float(remaining_wip))
                                             r_dict["Status"] = new_status
                                             
-                                            row_values = [str(r_dict.get(h, "")) for h in latest_headers]
+                                            row_values = [str(r_dict.get(h, "")) for h in sheet_headers]
                                             sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[row_values], value_input_option='USER_ENTERED')
 
                                     source_lots_str = ", ".join(combined_source_lots) if combined_source_lots else "TS-MIX"
                                     base_lot = combined_source_lots[0] if combined_source_lots else "TS-MIX"
-                                    suppliers_str = ", ".join(combined_suppliers) if combined_suppliers else "ไม่ระบุ" # ✨ รวมชื่อ Supplier
+                                    suppliers_str = ", ".join(combined_suppliers) if combined_suppliers else "ไม่ระบุ" 
 
                                     breakdown_str = f"{g1_type}: {g1_qty} | {g2_type}: {g2_qty} | {g3_type}: {g3_qty} | {g4_type}: {g4_qty}"
                                     log_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     
-                                    # ✨ บันทึก Log พร้อม Supplier Name
                                     packing_log_row = [
                                         log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, breakdown_str, 
                                         float(total_packed_output), float(waste_qty), packing_date_str, note
@@ -1448,7 +1529,6 @@ elif menu == "📦 Packing Module":
                                             created_count += 1
                                             custom_fg_lot = f"{base_lot}-FG{created_count}-{g_type}"
                                             
-                                            # ✨ บันทึก Record พร้อม Supplier Name
                                             rec_row = [
                                                 log_time, source_lots_str, suppliers_str, default_fg_name, packed_fg_name, custom_fg_lot, 
                                                 g_type, float(g_q), float(waste_qty) if idx_fg == 0 else 0.0, packing_date_str, note
@@ -1579,11 +1659,9 @@ elif menu == "🚚 Shipped Out Module":
                     qty = item["qty"]
 
                     if source == "main":
-                        # ✨ แก้ไขใหม่: ดึง Header จาก Google Sheets จริงมาเทียบชื่อคอลัมน์ เพื่อป้องกันคอลัมน์เพี้ยน
                         sheet_headers = [str(h).strip() for h in sheet.row_values(1)]
                         current_row_values = sheet.row_values(row_idx)
                         
-                        # เติมช่องว่างให้ครบตามจำนวน Header
                         while len(current_row_values) < len(sheet_headers):
                             current_row_values.append("")
 
@@ -1593,18 +1671,15 @@ elif menu == "🚚 Shipped Out Module":
                         remaining_qty = max(0.0, current_qty - qty)
                         new_status = "Delivered" if remaining_qty <= 0 else ("Pending Packing" if "WIP" in item["category"] else "Trading Goods Received to Stock")
 
-                        # อัปเดตค่าเฉพาะคอลัมน์ Quantity และ Status ตามชื่อจริง
                         row_dict["Quantity"] = str(remaining_qty)
                         row_dict["Status"] = new_status
 
-                        # จัดเรียงข้อมูลกลับลง List ตามตำแหน่ง Header ปัจจุบันในชีต
                         updated_row_values = [str(row_dict.get(h, "")) for h in sheet_headers]
                         col_end_letter = chr(64 + len(sheet_headers)).upper()
                         
                         sheet.update(range_name=f"A{row_idx}:{col_end_letter}{row_idx}", values=[updated_row_values], value_input_option='USER_ENTERED')
 
                     elif source == "packing_records":
-                        # ✨ แก้ไขใหม่: ค้นหาตำแหน่งคอลัมน์ Quantity จากชื่อ Header จริงใน Packing_Records
                         pack_headers = [str(h).strip() for h in packing_records_sheet.row_values(1)]
                         qty_col_idx = pack_headers.index("Quantity") + 1 if "Quantity" in pack_headers else 8
                         
