@@ -35,7 +35,7 @@ st.markdown(
 # 2. ฟังก์ชัน Cache ที่ปลอดภัย (แยกจำแต่ละ Sheet เด็ดขาด)
 # ==========================================
 @st.cache_data(ttl=30, show_spinner=False)
-def get_cached_data(sheet_name, _sheet):
+def get_cached_data(sheet_name, _sheet, include_row_index=False):
     try:
         rows = _sheet.get_all_values()
         if not rows or len(rows) <= 1:
@@ -44,7 +44,7 @@ def get_cached_data(sheet_name, _sheet):
         headers = [str(h).strip() for h in rows[0]]
         data = []
         
-        for r in rows[1:]:
+        for sheet_row, r in enumerate(rows[1:], start=2):
             # กรองบรรทัดที่ว่างเปล่าทิ้ง ป้องกันตารางบวม
             if not any(str(cell).strip() for cell in r):
                 continue
@@ -53,6 +53,8 @@ def get_cached_data(sheet_name, _sheet):
                 r.append("")
             
             row_dict = {headers[i]: r[i] for i in range(len(headers))}
+            if include_row_index:
+                row_dict["Original_Row_Index"] = sheet_row
             data.append(row_dict)
             
         return data
@@ -119,6 +121,20 @@ def clean_quantity(val):
     try: return float(str(val).replace(",", "").strip())
     except: return 0.0
 
+DELIVERY_PENDING_VALUES = {"tbc", "to be confirmed", "tbd", "to be decided", "", "nan", "nat", "none"}
+
+
+def parse_delivery_date(value):
+    text = str(value).strip()
+    if text.casefold() in DELIVERY_PENDING_VALUES:
+        return pd.NaT
+    if re.match(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}(?:\D|$)", text):
+        parsed = pd.to_datetime(text, yearfirst=True, errors="coerce")
+    else:
+        parsed = pd.to_datetime(text, dayfirst=True, errors="coerce")
+    return pd.Timestamp(parsed.date()) if pd.notna(parsed) else pd.NaT
+
+
 def format_df_quantity(df):
     if df is not None and not df.empty:
         df_copy = df.copy()
@@ -129,7 +145,7 @@ def format_df_quantity(df):
             date_keywords = ["date", "วันที่", "timestamp"]
             if any(k in col_str for k in date_keywords):
                 def format_date(x):
-                    if pd.isna(x) or str(x).strip() == "" or str(x).strip().lower() in ["to be decided", "tbd", "nan", "nat", "none"]:
+                    if pd.isna(x) or str(x).strip().casefold() in DELIVERY_PENDING_VALUES:
                         return x
                     try:
                         d_str = str(x).strip().split(" ")[0] # ตัดเวลาทิ้งก่อนเอามาวิเคราะห์
@@ -216,9 +232,12 @@ if menu == "🚨 Delivery Issue":
             pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del")
             if pwd == "tstd": st.markdown("[🟢 **คลิกเพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
 
+    if "delivery_reschedule_success" in st.session_state:
+        st.success(st.session_state.pop("delivery_reschedule_success"))
+
     try:
         del_sheet = sh.worksheet("Delivery_schedule")
-        data_del = get_cached_data("delivery", del_sheet) 
+        data_del = get_cached_data("delivery", del_sheet, include_row_index=True)
         df_del = pd.DataFrame(data_del) if data_del else pd.DataFrame()
     except gspread.exceptions.WorksheetNotFound:
         st.error("❌ ไม่พบแท็บชื่อ 'Delivery_schedule' ใน Google Sheets")
@@ -229,7 +248,6 @@ if menu == "🚨 Delivery Issue":
 
     if not df_del.empty:
         df_del.columns = [str(c).strip() for c in df_del.columns]
-        df_del["Original_Row_Index"] = df_del.index + 2
 
         vol_col = next((c for c in df_del.columns if "volume" in str(c).lower()), None)
         fg_col = next((c for c in df_del.columns if "available fg" in str(c).lower()), None)
@@ -250,6 +268,16 @@ if menu == "🚨 Delivery Issue":
             df_del["Status (ความพร้อม)"] = df_del.apply(check_readiness, axis=1)
 
         date_col = next((c for c in ["Expected Shipping Date", "Shipment date", "Delivery date", "Shipment Date", "Delivery Date"] if c in df_del.columns), None)
+
+        delivery_internal_columns = ["Original_Row_Index", "Is_Unscheduled", "Parsed_Delivery_Date"]
+        if date_col:
+            df_del[date_col] = df_del[date_col].astype(str).str.strip()
+            df_del["Is_Unscheduled"] = df_del[date_col].str.casefold().isin(DELIVERY_PENDING_VALUES)
+            df_del["Parsed_Delivery_Date"] = df_del[date_col].map(parse_delivery_date)
+            df_del = df_del.sort_values(
+                by=["Is_Unscheduled", "Parsed_Delivery_Date"],
+                ascending=True, kind="stable", na_position="last",
+            )
 
         with st.expander("✏️ เลื่อน/ปรับเปลี่ยนกำหนดการจัดส่ง (Reschedule)"):
             with st.form("reschedule_form"):
@@ -278,72 +306,89 @@ if menu == "🚨 Delivery Issue":
                     reschedule_opts.append(disp_txt)
                     reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt}
                     
-                selected_items = st.multiselect("เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts)
-                new_date = st.date_input("กำหนดการใหม่ (New Expected Date)", value=date.today())
-                
+                selected_items = st.multiselect(
+                    "เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts,
+                    key="delivery_reschedule_items",
+                )
+                mark_tbc = st.checkbox(
+                    "TBC — ยกเลิกวันส่งเดิม / รอยืนยันกำหนดใหม่",
+                    key="delivery_reschedule_tbc",
+                    help="เลือกเมื่อยกเลิกวันส่งเดิมและยังไม่มีวันใหม่ ระบบจะบันทึก TBC แทนวันที่ที่เลือกด้านล่าง โดยเก็บรายการสินค้าไว้",
+                )
+                new_date = st.date_input(
+                    "กำหนดการใหม่ (New Expected Date)", value=date.today(),
+                    key="delivery_reschedule_date",
+                    help="ใช้วันที่นี้เมื่อไม่ได้เลือก TBC",
+                )
+
                 if st.form_submit_button("💾 บันทึกกำหนดการใหม่"):
                     if not selected_items:
                         st.error("❌ กรุณาเลือกรายการอย่างน้อย 1 รายการ")
-                    elif date_col:
-                        headers = del_sheet.row_values(1)
-                        if date_col in headers:
-                            col_idx = headers.index(date_col) + 1 
-                            cells_to_update = []
-                            success_rows = []
-                            for sel in selected_items:
-                                target_row = reschedule_map[sel]["row_idx"]
-                                cells_to_update.append(gspread.Cell(row=target_row, col=col_idx, value=str(new_date)))
-                                success_rows.append(str(target_row))
-                            
-                            del_sheet.update_cells(cells_to_update)
-                            get_cached_data.clear() 
-                            st.success(f"✅ อัปเดตวันจัดส่งใหม่เป็น {new_date} สำหรับบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว!")
-                            time.sleep(1)
-                            st.rerun()
+                    elif not date_col:
+                        st.error("❌ ไม่พบคอลัมน์วันที่จัดส่ง จึงยังบันทึกกำหนดการใหม่ไม่ได้")
+                    elif not mark_tbc and new_date is None:
+                        st.error("❌ กรุณาระบุวันจัดส่งใหม่ หรือเลือก TBC หากยังไม่มีกำหนด")
+                    else:
+                        try:
+                            headers = [str(header).strip() for header in del_sheet.row_values(1)]
+                            if date_col not in headers:
+                                st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
+                            else:
+                                col_idx = headers.index(date_col) + 1
+                                new_value = "TBC" if mark_tbc else new_date.isoformat()
+                                cells_to_update = []
+                                success_rows = []
+                                for selected in selected_items:
+                                    target_row = int(reschedule_map[selected]["row_idx"])
+                                    cells_to_update.append(gspread.Cell(row=target_row, col=col_idx, value=new_value))
+                                    success_rows.append(str(target_row))
+                                del_sheet.update_cells(cells_to_update)
+                        except Exception as error:
+                            st.error(f"❌ บันทึกกำหนดการไม่สำเร็จ กรุณาลองใหม่: {error}")
                         else:
-                            st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
+                            if date_col in headers:
+                                get_cached_data.clear()
+                                schedule_label = "TBC (รอยืนยันวันจัดส่งใหม่)" if mark_tbc else new_date.strftime("%d/%m/%Y")
+                                st.session_state["delivery_reschedule_success"] = (
+                                    f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว"
+                                )
+                                st.rerun()
 
         st.divider()
 
         if date_col:
-            df_del[date_col] = df_del[date_col].astype(str).str.strip()
-            df_del["Is_TBD"] = df_del[date_col].str.lower().isin(["to be decided", "tbd", "", "nan", "nat", "none"])
-            tbd_df = df_del[df_del["Is_TBD"]].copy()
-            dated_df = df_del[~df_del["Is_TBD"]].copy()
-            dated_df = dated_df.sort_values(by=date_col, ascending=True)
-            unique_dates = dated_df[date_col].unique()
+            dated_df = df_del[df_del["Parsed_Delivery_Date"].notna()]
+            invalid_df = df_del[~df_del["Is_Unscheduled"] & df_del["Parsed_Delivery_Date"].isna()]
+            tbc_df = df_del[df_del["Is_Unscheduled"]]
 
-            for d_date in unique_dates:
-                sub_df = dated_df[dated_df[date_col] == d_date]
-                sub_display = sub_df.drop(columns=["Is_TBD", "Original_Row_Index"], errors="ignore")
-                
-                parsed_d = pd.to_datetime(d_date, dayfirst=True, errors='coerce')
-                date_display = str(d_date)
-                
-                if pd.notna(parsed_d):
-                    thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
-                    thai_day_str = thai_days[parsed_d.weekday()]
-                    diff_days = (parsed_d.date() - date.today()).days
-                    
-                    if diff_days < 0: bg_color, border_color, text_color, urgency_icon, diff_text = "#fecaca", "#f87171", "#7f1d1d", "🚨", f"เลยกำหนดมาแล้ว {abs(diff_days)} วัน"
-                    elif diff_days == 0: bg_color, border_color, text_color, urgency_icon, diff_text = "#fed7aa", "#fb923c", "#7c2d12", "🔥", "วันนี้"
-                    elif diff_days <= 3: bg_color, border_color, text_color, urgency_icon, diff_text = "#fef08a", "#facc15", "#713f12", "⚠️", f"อีก {diff_days} วัน"
-                    else: bg_color, border_color, text_color, urgency_icon, diff_text = "#bbf7d0", "#4ade80", "#14532d", "📅", f"อีก {diff_days} วัน"
-                        
-                    date_display = f"{urgency_icon} กำหนดส่ง: วัน{thai_day_str}ที่ {d_date} ({diff_text})"
-                else:
-                    bg_color, border_color, text_color = "#e2e8f0", "#a0aec0", "#2d3748"
+            for parsed_d, sub_df in dated_df.groupby("Parsed_Delivery_Date", sort=True):
+                sub_display = sub_df.drop(columns=delivery_internal_columns, errors="ignore")
+                d_date = parsed_d.strftime("%d/%m/%Y")
+                thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+                thai_day_str = thai_days[parsed_d.weekday()]
+                diff_days = (parsed_d.date() - date.today()).days
 
+                if diff_days < 0: bg_color, border_color, text_color, urgency_icon, diff_text = "#fecaca", "#f87171", "#7f1d1d", "🚨", f"เลยกำหนดมาแล้ว {abs(diff_days)} วัน"
+                elif diff_days == 0: bg_color, border_color, text_color, urgency_icon, diff_text = "#fed7aa", "#fb923c", "#7c2d12", "🔥", "วันนี้"
+                elif diff_days <= 3: bg_color, border_color, text_color, urgency_icon, diff_text = "#fef08a", "#facc15", "#713f12", "⚠️", f"อีก {diff_days} วัน"
+                else: bg_color, border_color, text_color, urgency_icon, diff_text = "#bbf7d0", "#4ade80", "#14532d", "📅", f"อีก {diff_days} วัน"
+
+                date_display = f"{urgency_icon} กำหนดส่ง: วัน{thai_day_str}ที่ {d_date} ({diff_text})"
                 st.markdown(f'<div style="background-color: {bg_color}; color: {text_color}; padding: 15px 20px; border-radius: 8px; margin-top: 20px; margin-bottom: 12px; font-weight: bold; font-size: 22px; border-left: 8px solid {border_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">{date_display}</div>', unsafe_allow_html=True)
                 st.dataframe(format_df_quantity(sub_display), use_container_width=True)
 
-            if not tbd_df.empty:
-                tbd_display = tbd_df.drop(columns=["Is_TBD", "Original_Row_Index"], errors="ignore")
-                st.markdown('<div style="background-color: #f1f5f9; color: #334155; padding: 15px 20px; border-radius: 8px; margin-top: 30px; margin-bottom: 12px; font-weight: bold; font-size: 22px; border-left: 8px solid #94a3b8; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">⏳ กำหนดส่ง: To be decided (รอยืนยันกำหนดการ)</div>', unsafe_allow_html=True)
-                st.dataframe(format_df_quantity(tbd_display), use_container_width=True)
+            if not invalid_df.empty:
+                st.warning("⚠️ รายการต่อไปนี้มีรูปแบบวันที่ไม่ถูกต้อง กรุณาระบุวันจัดส่งใหม่หรือเลือก TBC")
+                st.dataframe(format_df_quantity(invalid_df.drop(columns=delivery_internal_columns, errors="ignore")), use_container_width=True)
+
+            if not tbc_df.empty:
+                tbc_display = tbc_df.drop(columns=delivery_internal_columns, errors="ignore")
+                st.markdown('<div style="background-color: #f1f5f9; color: #334155; padding: 15px 20px; border-radius: 8px; margin-top: 30px; margin-bottom: 12px; font-weight: bold; font-size: 22px; border-left: 8px solid #94a3b8; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">⏳ กำหนดส่ง: TBC (รอยืนยันวันจัดส่งใหม่)</div>', unsafe_allow_html=True)
+                st.caption("รายการยังคงอยู่ในระบบ สามารถกำหนดวันใหม่ได้จากช่องปรับเปลี่ยนกำหนดการด้านบน")
+                st.dataframe(format_df_quantity(tbc_display), use_container_width=True)
         else:
             st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้")
-            st.dataframe(format_df_quantity(df_del.drop(columns=["Original_Row_Index"], errors="ignore")), use_container_width=True)
+            st.dataframe(format_df_quantity(df_del.drop(columns=delivery_internal_columns, errors="ignore")), use_container_width=True)
     else:
         st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule'")
 
@@ -440,6 +485,7 @@ elif menu == "📊 Stock Summary & Details":
             min-width: 145px; max-width: 220px; background: var(--tint);
             color: var(--deep); text-align: center; font-size: 12px;
             font-weight: 700; overflow-wrap: anywhere; }
+        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 22px; line-height: 1.5; }
         .stock-matrix th:first-child { position: sticky; left: 0; z-index: 1;
             min-width: 125px; background: #fff; color: #475569;
             text-align: left; white-space: nowrap; box-shadow: 3px 0 8px #0f172a05; }
@@ -519,7 +565,7 @@ elif menu == "📊 Stock Summary & Details":
                 '<thead><tr><th scope="col">Size / Grade</th>',
             ])
             for cultivar in pivot_df.columns:
-                html.append(f'<th scope="col">{escape(str(cultivar))}</th>')
+                html.append(f'<th scope="col" class="stock-matrix__cultivar">{escape(str(cultivar))}</th>')
             html.append('<th scope="col" class="stock-matrix__row-total">รวมตามเกรด (g)</th></tr></thead><tbody>')
 
             max_quantity = float(pivot_df.to_numpy().max())
