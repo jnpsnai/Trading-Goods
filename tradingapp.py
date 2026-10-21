@@ -5,6 +5,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
 import streamlit as st
 import re
+from html import escape
 
 # ==========================================
 # 1. ตั้งค่าหน้าเว็บ Streamlit (Wide Mode & CSS)
@@ -205,6 +206,164 @@ def format_df_quantity(df):
         return df_copy
     return df
 
+def render_portal_ui_styles():
+    st.markdown("""<style>
+    .st-key-delivery_header h1, .st-key-stock_header h1 {
+        color: #0f172a; font-size: clamp(27px, 2.8vw, 36px); line-height: 1.3;
+        letter-spacing: -.035em; padding-bottom: 8px; }
+    .st-key-delivery_header [data-testid="stCaptionContainer"],
+    .st-key-stock_header [data-testid="stCaptionContainer"] { color: #64748b; font-size: 14px; }
+    .st-key-delivery_header [data-testid="stCaptionContainer"] p,
+    .st-key-stock_header [data-testid="stCaptionContainer"] p { color: #64748b; }
+    .portal-section { --section-accent: #2563eb; margin: 12px 0 18px; }
+    .portal-section--slate { --section-accent: #475569; }
+    .portal-section--amber { --section-accent: #b45309; }
+    .portal-section--teal { --section-accent: #0f766e; }
+    .portal-section__eyebrow { color: var(--section-accent); font-size: 11px;
+        font-weight: 750; letter-spacing: .12em; margin-bottom: 6px; }
+    .portal-section h2 { margin: 0; padding: 0; color: #0f172a;
+        font-size: 21px; line-height: 1.45; font-weight: 750; }
+    .portal-section p { margin: 6px 0 0; color: #64748b; font-size: 14px; line-height: 1.7; }
+    .st-key-delivery_overview [data-testid="stHorizontalBlock"],
+    .st-key-stock_overview [data-testid="stHorizontalBlock"] {
+        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .st-key-stock_overview [data-testid="stHorizontalBlock"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .st-key-delivery_overview [data-testid="stColumn"],
+    .st-key-stock_overview [data-testid="stColumn"] { min-width: 0 !important; width: auto !important; }
+    .st-key-delivery_overview [data-testid="stMetric"],
+    .st-key-stock_overview [data-testid="stMetric"] {
+        padding: 18px 20px; background: #fff; border: 1px solid #e2e8f0;
+        border-top: 3px solid #2563eb; border-radius: 14px; box-shadow: 0 3px 12px #0f172a04; }
+    .st-key-delivery_overview [data-testid="stMetricLabel"] p,
+    .st-key-stock_overview [data-testid="stMetricLabel"] p { color: #475569; font-size: 13px; line-height: 1.5;
+        white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
+    .st-key-delivery_overview [data-testid="stMetricValue"],
+    .st-key-stock_overview [data-testid="stMetricValue"] {
+        color: #0f172a; font-size: 30px; font-weight: 750; font-variant-numeric: tabular-nums; }
+    .st-key-delivery_overview [data-testid="stColumn"]:nth-child(3) [data-testid="stMetric"] { border-top-color: #0f766e; }
+    .st-key-delivery_overview [data-testid="stColumn"]:nth-child(4) [data-testid="stMetric"] { border-top-color: #94a3b8; }
+    .st-key-stock_overview [data-testid="stColumn"]:first-child [data-testid="stMetric"] { border-top-color: #334155; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(2) [data-testid="stMetric"] { border-top-color: #d97706; background: #fffcf5; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(2) [data-testid="stMetricValue"] { color: #92400e; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(3) [data-testid="stMetric"] { border-top-color: #0f766e; background: #f6fefc; }
+    .st-key-stock_overview [data-testid="stColumn"]:nth-child(3) [data-testid="stMetricValue"] { color: #115e59; }
+    .portal-balance { margin: 8px 0 24px; padding: 16px 20px; background: #f8fafc;
+        border: 1px solid #e2e8f0; border-radius: 12px; }
+    .portal-balance__labels { display: flex; justify-content: space-between; gap: 12px;
+        margin-bottom: 10px; color: #475569; font-size: 12px; }
+    .portal-balance__labels strong { font-weight: 700; }
+    .portal-balance__wip { color: #92400e; }
+    .portal-balance__fg { color: #115e59; }
+    .portal-balance__track { display: flex; height: 8px; overflow: hidden;
+        border-radius: 99px; background: #e2e8f0; }
+    .portal-balance__segment--wip { background: #d97706; }
+    .portal-balance__segment--fg { background: #0f766e; }
+    .st-key-delivery_reschedule { margin: 12px 0 24px; }
+    .st-key-delivery_reschedule [data-testid="stForm"] { background: #f8fafc;
+        border: 1px solid #e2e8f0; border-radius: 14px; padding: 20px; }
+    .st-key-delivery_reschedule [data-testid="stForm"] label p { font-size: 14px; color: #334155; }
+    .st-key-delivery_reschedule [data-testid="stFormSubmitButton"] button {
+        background: #1d4ed8; color: #fff; border: 1px solid #1d4ed8;
+        border-radius: 10px; min-height: 44px; font-weight: 650; }
+    .st-key-delivery_reschedule [data-testid="stFormSubmitButton"] button:hover { background: #1e40af; border-color: #1e40af; }
+    .portal-day { --day-accent: #0f766e; --day-tint: #f0fdfa; --day-line: #99f6e4;
+        display: flex; align-items: center; justify-content: space-between;
+        flex-wrap: wrap; gap: 18px; padding: 20px; margin-bottom: 12px;
+        border-left: 4px solid var(--day-accent); border-radius: 12px;
+        background: linear-gradient(110deg, var(--day-tint), #fff 75%); }
+    .portal-day--overdue { --day-accent: #be123c; --day-tint: #fff1f2; --day-line: #fecdd3; }
+    .portal-day--today { --day-accent: #b45309; --day-tint: #fffbeb; --day-line: #fde68a; }
+    .portal-day--soon { --day-accent: #1d4ed8; --day-tint: #eff6ff; --day-line: #bfdbfe; }
+    .portal-day--pending { --day-accent: #475569; --day-tint: #f8fafc; --day-line: #cbd5e1; }
+    .portal-day__main { min-width: 0; }
+    .portal-day__eyebrow { color: var(--day-accent); font-size: 11px; font-weight: 750;
+        letter-spacing: .09em; margin-bottom: 6px; }
+    .portal-day__title { color: #0f172a; font-size: 21px; line-height: 1.5; font-weight: 750; }
+    .portal-day__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+        color: #64748b; font-size: 13px; line-height: 1.7; margin-top: 10px; }
+    .portal-day__badge { display: inline-block; padding: 4px 10px; border-radius: 99px;
+        margin-top: 0; color: var(--day-accent); background: var(--day-tint);
+        border: 1px solid var(--day-line); font-size: 12px; font-weight: 650; }
+    .portal-day-volume { min-width: 180px; padding: 12px 18px; background: #fff;
+        border: 1px solid var(--day-line); border-radius: 12px; }
+    .portal-day-volume__label { color: #475569; font-size: 12px; margin-bottom: 4px; }
+    .portal-day-volume__value { color: var(--day-accent); font-size: 28px;
+        font-weight: 750; font-variant-numeric: tabular-nums; line-height: 1.4; }
+    .st-key-delivery_list [data-testid="stDataFrame"],
+    .st-key-stock_details_wip [data-testid="stDataFrame"],
+    .st-key-stock_details_fg [data-testid="stDataFrame"] {
+        border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+    .st-key-stock_details_wip, .st-key-stock_details_fg { padding: 22px;
+        border: 1px solid #fde68a; border-top: 3px solid #d97706;
+        border-radius: 16px; background: #fff; margin-bottom: 20px; }
+    .st-key-stock_details_fg { border-color: #99f6e4; border-top-color: #0f766e; }
+    .portal-grade-grid { --grade-tint: #fffbeb; --grade-line: #fde68a; --grade-text: #92400e;
+        display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0 0 18px; }
+    .portal-grade-grid--fg { --grade-tint: #f0fdfa; --grade-line: #99f6e4; --grade-text: #115e59; }
+    .portal-grade { padding: 12px 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #f8fafc; }
+    .portal-grade dt { margin: 0 0 6px; color: #64748b; font-size: 11px; font-weight: 700; letter-spacing: .05em; }
+    .portal-grade dd { margin: 0; color: #334155; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .portal-grade dd small { font-size: 11px; font-weight: 500; }
+    .portal-grade--total { background: var(--grade-tint); border-color: var(--grade-line); }
+    .portal-grade--total dt, .portal-grade--total dd { color: var(--grade-text); }
+    .portal-empty { color: #64748b; background: #f8fafc; border: 1px dashed #cbd5e1;
+        padding: 28px 20px; border-radius: 12px; text-align: center; font-size: 14px; line-height: 1.7; }
+    @media (max-width: 760px) {
+        .portal-grade-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .portal-grade--total { grid-column: 1 / -1; }
+        .portal-day { align-items: stretch; flex-direction: column; gap: 14px; padding: 16px; }
+        .portal-day__title { font-size: 19px; }
+        .portal-day-volume { display: flex; align-items: center; justify-content: space-between;
+            flex-wrap: wrap; gap: 8px; min-width: 0; padding: 10px 14px; }
+        .portal-day-volume__label { margin: 0; }
+        .portal-day-volume__value { font-size: 25px; }
+    }
+    @media (max-width: 640px) {
+        .st-key-delivery_overview [data-testid="stHorizontalBlock"],
+        .st-key-stock_overview [data-testid="stHorizontalBlock"] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .st-key-stock_overview [data-testid="stColumn"]:first-child { grid-column: 1 / -1; }
+        .st-key-delivery_overview [data-testid="stMetric"],
+        .st-key-stock_overview [data-testid="stMetric"] { padding: 14px; }
+        .st-key-delivery_overview [data-testid="stMetricValue"],
+        .st-key-stock_overview [data-testid="stMetricValue"] { font-size: 21px; }
+        .st-key-delivery_overview [data-testid="stMetricLabel"],
+        .st-key-stock_overview [data-testid="stMetricLabel"] { height: auto; min-height: 40px; }
+        .st-key-stock_overview [data-testid="stColumn"]:first-child [data-testid="stMetricValue"] { font-size: 28px; }
+        .st-key-stock_details_wip, .st-key-stock_details_fg { padding: 16px; }
+        .portal-section h2 { font-size: 19px; }
+        .portal-section p { font-size: 13px; }
+        .portal-balance { padding: 14px; }
+    }
+    </style>""", unsafe_allow_html=True)
+
+
+def render_section_heading(title, description, eyebrow="", tone="blue"):
+    if tone not in {"blue", "slate", "amber", "teal"}:
+        tone = "blue"
+    st.markdown(
+        f'<header class="portal-section portal-section--{tone}">'
+        f'<div class="portal-section__eyebrow">{escape(eyebrow)}</div>'
+        f'<h2>{escape(title)}</h2><p>{escape(description)}</p></header>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_grade_summary(stock_df, total, stock_type):
+    grade_names = stock_df["Grade"].astype(str).str.strip().str.upper()
+    items = [(grade, stock_df.loc[grade_names.eq(grade), "Clean_Qty"].sum())
+             for grade in ("BIG", "SMALL", "MIX", "F")]
+    items.append((f"รวม {stock_type}", total))
+    html = [f'<dl class="portal-grade-grid portal-grade-grid--{stock_type.lower()}">']
+    for index, (label, quantity) in enumerate(items):
+        total_class = " portal-grade--total" if index == len(items) - 1 else ""
+        html.append(
+            f'<div class="portal-grade{total_class}"><dt>{escape(label)}</dt>'
+            f'<dd>{quantity:,.2f} <small>g</small></dd></div>'
+        )
+    html.append('</dl>')
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
 # ==========================================
 # 5. Sidebar เมนูด้านซ้าย
 # ==========================================
@@ -222,15 +381,16 @@ st.sidebar.info("ระบบจัดการสินค้า Trading แล
 # หน้าที่ 1: Delivery Issue
 # ==========================================
 if menu == "🚨 Delivery Issue":
-    col_head1, col_head2 = st.columns([7, 3])
-    with col_head1:
-        st.title("🚨 Delivery Issue - รายการที่ต้องจัดส่ง")
-        st.markdown("แสดงรายการและสถานะความพร้อมในการจัดส่ง (ดึงจากแท็บ **Delivery_schedule**)")
-    with col_head2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        with st.expander("🔗 Direct Google Sheets"):
-            pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del")
-            if pwd == "tstd": st.markdown("[🟢 **คลิกเพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
+    render_portal_ui_styles()
+    with st.container(key="delivery_header"):
+        col_head1, col_head2 = st.columns([4, 1])
+        with col_head1:
+            st.title("Delivery Issue")
+            st.caption("ติดตามกำหนดส่ง ความพร้อมของสินค้า และยอดจัดส่งในแต่ละวัน")
+        with col_head2:
+            with st.expander("🔗 เปิด Google Sheets"):
+                pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd_del")
+                if pwd == "tstd": st.markdown("[🟢 **เปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit)")
 
     if "delivery_reschedule_success" in st.session_state:
         st.success(st.session_state.pop("delivery_reschedule_success"))
@@ -279,127 +439,178 @@ if menu == "🚨 Delivery Issue":
                 ascending=True, kind="stable", na_position="last",
             )
 
-        with st.expander("✏️ เลื่อน/ปรับเปลี่ยนกำหนดการจัดส่ง (Reschedule)"):
-            with st.form("reschedule_form"):
-                st.markdown("เลือกรายการที่เลยกำหนด หรือต้องการเลื่อนวันส่ง **(สามารถเลือกได้หลายรายการพร้อมกัน)**")
-                reschedule_opts = []
-                reschedule_map = {}
-                for _, r in df_del.iterrows():
-                    row_idx = r["Original_Row_Index"]
-                    curr_dt = str(r.get(date_col, "")) if date_col else ""
-                    vol = r.get(vol_col if vol_col else "Volume", 0)
-                    
-                    item_name = "Unknown Item"
-                    for nk in ["Cultivar Name", "Cultivar name", "Cultivar", "Export Name", "Product", "ชื่อ"]:
-                        if nk in df_del.columns and str(r.get(nk, "")).strip() and str(r.get(nk, "")).strip().lower() != 'nan':
-                            item_name = str(r.get(nk, "")).strip(); break
+        scheduled_rows = df_del[df_del["Parsed_Delivery_Date"].notna()] if date_col else df_del.iloc[0:0]
+        with st.container(key="delivery_overview"):
+            render_section_heading(
+                "แผนจัดส่งสินค้า", "ดูยอดส่งและความพร้อมของรายการที่มีวันจัดส่ง พร้อมติดตามรายการรอยืนยัน",
+                eyebrow="DELIVERY PLANNING", tone="blue",
+            )
+            summary_cols = st.columns(4)
+            with summary_cols[0]:
+                st.metric("วันจัดส่งที่กำหนดแล้ว", f"{scheduled_rows['Parsed_Delivery_Date'].nunique():,}" if date_col else "—", help="จำนวนวันส่งที่มีวันที่ถูกต้อง รวมวันที่ผ่านมาแล้ว")
+            with summary_cols[1]:
+                st.metric("ยอดส่งตามกำหนด (Volume)", f"{scheduled_rows[vol_col].apply(clean_quantity).sum():,.2f}" if date_col and vol_col else "—", help="ยอดรวม Volume ของรายการที่มีวันจัดส่ง ไม่รวม TBC")
+            with summary_cols[2]:
+                ready_count = int(scheduled_rows["Status (ความพร้อม)"].eq("✅ พร้อมส่ง").sum()) if "Status (ความพร้อม)" in scheduled_rows else None
+                st.metric("พร้อมส่งตามกำหนด · รายการ", f"{ready_count:,}" if date_col and ready_count is not None else "—")
+            with summary_cols[3]:
+                st.metric("รอยืนยันวันส่ง (TBC) · รายการ", f"{int(df_del['Is_Unscheduled'].sum()):,}" if date_col else "—")
 
-                    item_grade = "-"
-                    for gk in ["Grade", "grade", "Size", "size"]:
-                        if gk in df_del.columns and str(r.get(gk, "")).strip() and str(r.get(gk, "")).strip().lower() != 'nan':
-                            item_grade = str(r.get(gk, "")).strip(); break
-                    
-                    try: vol_disp = f"{float(vol):,.2f}" if float(vol) % 1 != 0 else f"{int(vol):,}"
-                    except: vol_disp = str(vol)
-                            
-                    disp_txt = f"บรรทัด {row_idx} | {item_name} (Grade: {item_grade}) | วันเดิม: {curr_dt} | Volume: {vol_disp}"
-                    reschedule_opts.append(disp_txt)
-                    reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt}
-                    
-                selected_items = st.multiselect(
-                    "เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts,
-                    key="delivery_reschedule_items",
-                )
-                mark_tbc = st.checkbox(
-                    "TBC — ยกเลิกวันส่งเดิม / รอยืนยันกำหนดใหม่",
-                    key="delivery_reschedule_tbc",
-                    help="เลือกเมื่อยกเลิกวันส่งเดิมและยังไม่มีวันใหม่ ระบบจะบันทึก TBC แทนวันที่ที่เลือกด้านล่าง โดยเก็บรายการสินค้าไว้",
-                )
-                new_date = st.date_input(
-                    "กำหนดการใหม่ (New Expected Date)", value=date.today(),
-                    key="delivery_reschedule_date",
-                    help="ใช้วันที่นี้เมื่อไม่ได้เลือก TBC",
-                )
+        def display_delivery_table(frame):
+            display_frame = format_df_quantity(frame)
+            if "Status (ความพร้อม)" in display_frame.columns:
+                status_styles = {
+                    "✅ พร้อมส่ง": "background-color: #ecfdf5; color: #047857; font-weight: 600",
+                    "📦 รอแพ็ค": "background-color: #fffbeb; color: #92400e; font-weight: 600",
+                    "📥 รอรับเข้าสินค้า": "background-color: #eff6ff; color: #1d4ed8; font-weight: 600",
+                    "➖ N/A": "background-color: #f1f5f9; color: #475569",
+                }
+                display_frame = display_frame.style.map(lambda value: status_styles.get(str(value), ""), subset=["Status (ความพร้อม)"])
+            st.dataframe(
+                display_frame, width="stretch", hide_index=True,
+                column_config={
+                    "Cultivar Name": st.column_config.TextColumn("สายพันธุ์ / สินค้า", width="medium"),
+                    "Grade": st.column_config.TextColumn("เกรด", width="small"),
+                    "Status (ความพร้อม)": st.column_config.TextColumn("ความพร้อม", width="medium"),
+                },
+            )
 
-                if st.form_submit_button("💾 บันทึกกำหนดการใหม่"):
-                    if not selected_items:
-                        st.error("❌ กรุณาเลือกรายการอย่างน้อย 1 รายการ")
-                    elif not date_col:
-                        st.error("❌ ไม่พบคอลัมน์วันที่จัดส่ง จึงยังบันทึกกำหนดการใหม่ไม่ได้")
-                    elif not mark_tbc and new_date is None:
-                        st.error("❌ กรุณาระบุวันจัดส่งใหม่ หรือเลือก TBC หากยังไม่มีกำหนด")
-                    else:
-                        try:
-                            headers = [str(header).strip() for header in del_sheet.row_values(1)]
-                            if date_col not in headers:
-                                st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
-                            else:
-                                col_idx = headers.index(date_col) + 1
-                                new_value = "TBC" if mark_tbc else new_date.isoformat()
-                                cells_to_update = []
-                                success_rows = []
-                                for selected in selected_items:
-                                    target_row = int(reschedule_map[selected]["row_idx"])
-                                    cells_to_update.append(gspread.Cell(row=target_row, col=col_idx, value=new_value))
-                                    success_rows.append(str(target_row))
-                                del_sheet.update_cells(cells_to_update)
-                        except Exception as error:
-                            st.error(f"❌ บันทึกกำหนดการไม่สำเร็จ กรุณาลองใหม่: {error}")
+        with st.container(key="delivery_reschedule"):
+            with st.expander("✏️ เลื่อน/ปรับเปลี่ยนกำหนดการจัดส่ง (Reschedule)"):
+                with st.form("reschedule_form"):
+                    st.caption("เลือกได้หลายรายการ จากนั้นระบุวันส่งใหม่ หรือเลือก TBC หากยังไม่มีกำหนด")
+                    reschedule_opts = []
+                    reschedule_map = {}
+                    for _, r in df_del.iterrows():
+                        row_idx = r["Original_Row_Index"]
+                        curr_dt = str(r.get(date_col, "")) if date_col else ""
+                        vol = r.get(vol_col if vol_col else "Volume", 0)
+
+                        item_name = "Unknown Item"
+                        for nk in ["Cultivar Name", "Cultivar name", "Cultivar", "Export Name", "Product", "ชื่อ"]:
+                            if nk in df_del.columns and str(r.get(nk, "")).strip() and str(r.get(nk, "")).strip().lower() != 'nan':
+                                item_name = str(r.get(nk, "")).strip(); break
+
+                        item_grade = "-"
+                        for gk in ["Grade", "grade", "Size", "size"]:
+                            if gk in df_del.columns and str(r.get(gk, "")).strip() and str(r.get(gk, "")).strip().lower() != 'nan':
+                                item_grade = str(r.get(gk, "")).strip(); break
+
+                        try: vol_disp = f"{float(vol):,.2f}" if float(vol) % 1 != 0 else f"{int(vol):,}"
+                        except: vol_disp = str(vol)
+
+                        disp_txt = f"บรรทัด {row_idx} | {item_name} (Grade: {item_grade}) | วันเดิม: {curr_dt} | Volume: {vol_disp}"
+                        reschedule_opts.append(disp_txt)
+                        reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt}
+
+                    selected_items = st.multiselect(
+                        "เลือกรายการที่ต้องการแก้ไข (เลือกกี่รายการก็ได้)", reschedule_opts,
+                        key="delivery_reschedule_items",
+                    )
+                    mark_tbc = st.checkbox(
+                        "TBC — ยกเลิกวันส่งเดิม / รอยืนยันกำหนดใหม่",
+                        key="delivery_reschedule_tbc",
+                        help="เลือกเมื่อยกเลิกวันส่งเดิมและยังไม่มีวันใหม่ ระบบจะบันทึก TBC แทนวันที่ที่เลือกด้านล่าง โดยเก็บรายการสินค้าไว้",
+                    )
+                    new_date = st.date_input(
+                        "กำหนดการใหม่ (New Expected Date)", value=date.today(),
+                        key="delivery_reschedule_date",
+                        help="ใช้วันที่นี้เมื่อไม่ได้เลือก TBC",
+                    )
+
+                    if st.form_submit_button("💾 บันทึกกำหนดการใหม่"):
+                        if not selected_items:
+                            st.error("❌ กรุณาเลือกรายการอย่างน้อย 1 รายการ")
+                        elif not date_col:
+                            st.error("❌ ไม่พบคอลัมน์วันที่จัดส่ง จึงยังบันทึกกำหนดการใหม่ไม่ได้")
+                        elif not mark_tbc and new_date is None:
+                            st.error("❌ กรุณาระบุวันจัดส่งใหม่ หรือเลือก TBC หากยังไม่มีกำหนด")
                         else:
-                            if date_col in headers:
-                                get_cached_data.clear()
-                                schedule_label = "TBC (รอยืนยันวันจัดส่งใหม่)" if mark_tbc else new_date.strftime("%d/%m/%Y")
-                                st.session_state["delivery_reschedule_success"] = (
-                                    f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว"
-                                )
-                                st.rerun()
+                            try:
+                                headers = [str(header).strip() for header in del_sheet.row_values(1)]
+                                if date_col not in headers:
+                                    st.error(f"ไม่พบคอลัมน์ {date_col} ใน Google Sheets")
+                                else:
+                                    col_idx = headers.index(date_col) + 1
+                                    new_value = "TBC" if mark_tbc else new_date.isoformat()
+                                    cells_to_update = []
+                                    success_rows = []
+                                    for selected in selected_items:
+                                        target_row = int(reschedule_map[selected]["row_idx"])
+                                        cells_to_update.append(gspread.Cell(row=target_row, col=col_idx, value=new_value))
+                                        success_rows.append(str(target_row))
+                                    del_sheet.update_cells(cells_to_update)
+                            except Exception as error:
+                                st.error(f"❌ บันทึกกำหนดการไม่สำเร็จ กรุณาลองใหม่: {error}")
+                            else:
+                                if date_col in headers:
+                                    get_cached_data.clear()
+                                    schedule_label = "TBC (รอยืนยันวันจัดส่งใหม่)" if mark_tbc else new_date.strftime("%d/%m/%Y")
+                                    st.session_state["delivery_reschedule_success"] = (
+                                        f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับบรรทัดที่ {', '.join(success_rows)} เรียบร้อยแล้ว"
+                                    )
+                                    st.rerun()
 
-        st.divider()
+        render_section_heading(
+            "กำหนดการจัดส่ง", "เรียงวันส่งจากก่อนถึงหลัง พร้อมยอดรวมส่งของแต่ละวัน",
+            eyebrow="DELIVERY SCHEDULE", tone="blue",
+        )
+        with st.container(key="delivery_list"):
+            if date_col:
+                dated_df = df_del[df_del["Parsed_Delivery_Date"].notna()]
+                invalid_df = df_del[~df_del["Is_Unscheduled"] & df_del["Parsed_Delivery_Date"].isna()]
+                tbc_df = df_del[df_del["Is_Unscheduled"]]
 
-        if date_col:
-            dated_df = df_del[df_del["Parsed_Delivery_Date"].notna()]
-            invalid_df = df_del[~df_del["Is_Unscheduled"] & df_del["Parsed_Delivery_Date"].isna()]
-            tbc_df = df_del[df_del["Is_Unscheduled"]]
+                for parsed_d, sub_df in dated_df.groupby("Parsed_Delivery_Date", sort=True):
+                    sub_display = sub_df.drop(columns=delivery_internal_columns, errors="ignore")
+                    d_date = parsed_d.strftime("%d/%m/%Y")
+                    thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
+                    thai_day_str = thai_days[parsed_d.weekday()]
+                    diff_days = (parsed_d.date() - date.today()).days
+                    if diff_days < 0:
+                        day_tone, diff_text = "overdue", f"เลยกำหนด {abs(diff_days)} วัน"
+                    elif diff_days == 0:
+                        day_tone, diff_text = "today", "จัดส่งวันนี้"
+                    elif diff_days <= 3:
+                        day_tone, diff_text = "soon", f"อีก {diff_days} วัน"
+                    else:
+                        day_tone, diff_text = "scheduled", f"อีก {diff_days} วัน"
+                    daily_volume_display = (
+                        f"{sub_df[vol_col].apply(clean_quantity).sum():,.2f}"
+                        if vol_col else "ไม่พบคอลัมน์ Volume"
+                    )
+                    with st.container(border=True):
+                        st.markdown(
+                            f'<div class="delivery-day-header portal-day portal-day--{day_tone}">'
+                            '<div class="portal-day__main"><div class="portal-day__eyebrow">กำหนดส่ง</div>'
+                            f'<div class="portal-day__title">กำหนดส่ง: วัน{thai_day_str}ที่ {d_date}</div>'
+                            f'<div class="portal-day__meta"><span class="portal-day__badge">{diff_text}</span><span>{len(sub_df):,} รายการ</span></div></div>'
+                            '<div class="delivery-day-volume portal-day-volume">'
+                            '<div class="portal-day-volume__label">ยอดรวมส่ง (Volume)</div>'
+                            f'<div class="portal-day-volume__value">{daily_volume_display}</div>'
+                            '</div></div>', unsafe_allow_html=True,
+                        )
+                        display_delivery_table(sub_display)
 
-            for parsed_d, sub_df in dated_df.groupby("Parsed_Delivery_Date", sort=True):
-                sub_display = sub_df.drop(columns=delivery_internal_columns, errors="ignore")
-                d_date = parsed_d.strftime("%d/%m/%Y")
-                thai_days = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
-                thai_day_str = thai_days[parsed_d.weekday()]
-                diff_days = (parsed_d.date() - date.today()).days
+                if not invalid_df.empty:
+                    with st.container(border=True):
+                        st.warning("⚠️ รายการต่อไปนี้มีรูปแบบวันที่ไม่ถูกต้อง กรุณาระบุวันจัดส่งใหม่หรือเลือก TBC")
+                        display_delivery_table(invalid_df.drop(columns=delivery_internal_columns, errors="ignore"))
 
-                if diff_days < 0: bg_color, border_color, text_color, urgency_icon, diff_text = "#fecaca", "#f87171", "#7f1d1d", "🚨", f"เลยกำหนดมาแล้ว {abs(diff_days)} วัน"
-                elif diff_days == 0: bg_color, border_color, text_color, urgency_icon, diff_text = "#fed7aa", "#fb923c", "#7c2d12", "🔥", "วันนี้"
-                elif diff_days <= 3: bg_color, border_color, text_color, urgency_icon, diff_text = "#fef08a", "#facc15", "#713f12", "⚠️", f"อีก {diff_days} วัน"
-                else: bg_color, border_color, text_color, urgency_icon, diff_text = "#bbf7d0", "#4ade80", "#14532d", "📅", f"อีก {diff_days} วัน"
-
-                date_display = f"{urgency_icon} กำหนดส่ง: วัน{thai_day_str}ที่ {d_date} ({diff_text})"
-                daily_volume_display = (
-                    f"{sub_df[vol_col].apply(clean_quantity).sum():,.2f}"
-                    if vol_col else "ไม่พบคอลัมน์ Volume"
-                )
-                st.markdown(
-                    f'<div class="delivery-day-header" style="background-color: {bg_color}; color: {text_color}; padding: 15px 20px; border-radius: 8px; margin-top: 20px; margin-bottom: 12px; font-weight: bold; font-size: 22px; border-left: 8px solid {border_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">'
-                    f'<span>{date_display}</span>'
-                    f'<div class="delivery-day-volume" style="background-color: rgba(255,255,255,0.65); border: 1px solid {border_color}; border-radius: 8px; padding: 8px 14px;">'
-                    '<div style="font-size: 13px; font-weight: 600;">ยอดรวมส่ง (Volume)</div>'
-                    f'<div style="font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.4;">{daily_volume_display}</div>'
-                    '</div></div>', unsafe_allow_html=True,
-                )
-                st.dataframe(format_df_quantity(sub_display), use_container_width=True)
-
-            if not invalid_df.empty:
-                st.warning("⚠️ รายการต่อไปนี้มีรูปแบบวันที่ไม่ถูกต้อง กรุณาระบุวันจัดส่งใหม่หรือเลือก TBC")
-                st.dataframe(format_df_quantity(invalid_df.drop(columns=delivery_internal_columns, errors="ignore")), use_container_width=True)
-
-            if not tbc_df.empty:
-                tbc_display = tbc_df.drop(columns=delivery_internal_columns, errors="ignore")
-                st.markdown('<div style="background-color: #f1f5f9; color: #334155; padding: 15px 20px; border-radius: 8px; margin-top: 30px; margin-bottom: 12px; font-weight: bold; font-size: 22px; border-left: 8px solid #94a3b8; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">⏳ กำหนดส่ง: TBC (รอยืนยันวันจัดส่งใหม่)</div>', unsafe_allow_html=True)
-                st.caption("รายการยังคงอยู่ในระบบ สามารถกำหนดวันใหม่ได้จากช่องปรับเปลี่ยนกำหนดการด้านบน")
-                st.dataframe(format_df_quantity(tbc_display), use_container_width=True)
-        else:
-            st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้")
-            st.dataframe(format_df_quantity(df_del.drop(columns=delivery_internal_columns, errors="ignore")), use_container_width=True)
+                if not tbc_df.empty:
+                    with st.container(key="delivery_pending", border=True):
+                        st.markdown(
+                            '<div class="portal-day portal-day--pending"><div class="portal-day__main">'
+                            '<div class="portal-day__eyebrow">PENDING CONFIRMATION</div>'
+                            '<div class="portal-day__title">TBC · รอยืนยันวันจัดส่งใหม่</div>'
+                            f'<div class="portal-day__meta"><span class="portal-day__badge">ยังไม่มีกำหนดส่ง</span><span>{len(tbc_df):,} รายการ</span></div></div></div>',
+                            unsafe_allow_html=True,
+                        )
+                        st.caption("กำหนดวันใหม่ได้ในส่วนปรับเปลี่ยนกำหนดการด้านบน รายการจะกลับไปเรียงตามวันส่งโดยอัตโนมัติ")
+                        display_delivery_table(tbc_df.drop(columns=delivery_internal_columns, errors="ignore"))
+            else:
+                st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้")
+                display_delivery_table(df_del.drop(columns=delivery_internal_columns, errors="ignore"))
     else:
         st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule'")
 
@@ -407,8 +618,10 @@ if menu == "🚨 Delivery Issue":
 # หน้าที่ 2: Stock Summary & Details
 # ==========================================
 elif menu == "📊 Stock Summary & Details":
-    st.title("📊 Stock Summary & Details")
-    st.markdown("ภาพรวมสต็อกสินค้าคงเหลือ (On-hand Stock) และตารางสรุปยอดเมทริกซ์แยกตามสายพันธุ์ (WIP & FG)")
+    render_portal_ui_styles()
+    with st.container(key="stock_header"):
+        st.title("Stock Summary & Details")
+        st.caption("ติดตามสต็อกคงเหลือ สัดส่วน WIP / FG และรายละเอียดสินค้าแต่ละ Lot")
 
     data_main = get_cached_data("main", sheet)
     df_main = pd.DataFrame(data_main) if data_main else pd.DataFrame()
@@ -451,14 +664,30 @@ elif menu == "📊 Stock Summary & Details":
         total_fg = fg_stock_df["Clean_Qty"].sum()
         total_on_hand = total_wip + total_fg
 
-        # 📌 1. Metrics สรุปยอดรวมด้านบน
-        st.subheader("📌 สรุปยอดรวมสต็อกในคลังทั้งหมด (Total Stock Summary)")
-        col_m1, col_m2, col_m3 = st.columns(3)
-        with col_m1: st.metric(label="✨ ยอดรวมสต็อกทั้งหมด", value=f"{total_on_hand:,.2f} g")
-        with col_m2: st.metric(label="🧪 ยอดรวมประเภท WIP", value=f"{total_wip:,.2f} g")
-        with col_m3: st.metric(label="📦 ยอดรวมประเภท FG", value=f"{total_fg:,.2f} g")
+        render_section_heading(
+            "ภาพรวมสต็อกคงเหลือ", "ยอดคงเหลือจากสินค้าในคลังและรายการ Packing รวมเฉพาะสินค้าที่ยังมีสต็อก",
+            eyebrow="ON-HAND STOCK", tone="slate",
+        )
+        with st.container(key="stock_overview"):
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                st.metric("สต็อกคงเหลือทั้งหมด", f"{total_on_hand:,.2f} g")
+            with col_m2:
+                st.metric("งานระหว่างกระบวนการ · WIP", f"{total_wip:,.2f} g")
+            with col_m3:
+                st.metric("สินค้าสำเร็จรูป · FG", f"{total_fg:,.2f} g")
 
-        st.divider()
+        wip_share = float(total_wip / total_on_hand * 100) if total_on_hand else 0.0
+        fg_share = float(total_fg / total_on_hand * 100) if total_on_hand else 0.0
+        st.markdown(
+            '<div class="portal-balance"><div class="portal-balance__labels">'
+            f'<strong class="portal-balance__wip">WIP · {wip_share:.1f}%</strong>'
+            f'<strong class="portal-balance__fg">FG · {fg_share:.1f}%</strong></div>'
+            f'<div class="portal-balance__track" role="img" aria-label="สัดส่วนสต็อก WIP {wip_share:.1f}% และ FG {fg_share:.1f}%">'
+            f'<div class="portal-balance__segment--wip" style="width: {wip_share:.4f}%"></div>'
+            f'<div class="portal-balance__segment--fg" style="width: {fg_share:.4f}%"></div>'
+            '</div></div>', unsafe_allow_html=True,
+        )
 
         from html import escape
 
@@ -496,7 +725,7 @@ elif menu == "📊 Stock Summary & Details":
             min-width: 145px; max-width: 220px; background: var(--tint);
             color: var(--deep); text-align: center; font-size: 12px;
             font-weight: 700; overflow-wrap: anywhere; }
-        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 22px; line-height: 1.5; }
+        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 20px; line-height: 1.5; }
         .stock-matrix th:first-child { position: sticky; left: 0; z-index: 1;
             min-width: 125px; background: #fff; color: #475569;
             text-align: left; white-space: nowrap; box-shadow: 3px 0 8px #0f172a05; }
@@ -607,42 +836,40 @@ elif menu == "📊 Stock Summary & Details":
 
         st.divider()
 
-        # 📂 4. ตารางรายละเอียดเชิงลึก (แสดงแบบปกติ)
-        st.subheader("📂 ตารางรายละเอียดสต็อกเชิงลึกทั้งหมด (Detailed Tables)")
-        
-        st.markdown("##### 🧪 1. รายละเอียดสต็อกสินค้า WIP (Work in Progress)")
-        if not wip_stock_df.empty:
-            wip_big = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"]["Clean_Qty"].sum()
-            wip_small = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"]["Clean_Qty"].sum()
-            wip_mix = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"]["Clean_Qty"].sum()
-            wip_f = wip_stock_df[wip_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"]["Clean_Qty"].sum()
-
-            wc1, wc2, wc3, wc4, wc5 = st.columns(5)
-            with wc1: st.metric(label="WIP: Big", value=f"{wip_big:,.2f}")
-            with wc2: st.metric(label="WIP: Small", value=f"{wip_small:,.2f}")
-            with wc3: st.metric(label="WIP: Mix", value=f"{wip_mix:,.2f}")
-            with wc4: st.metric(label="WIP: F", value=f"{wip_f:,.2f}")
-            with wc5: st.metric(label="WIP Total", value=f"{total_wip:,.2f}")
-            st.dataframe(format_df_quantity(wip_stock_df), use_container_width=True)
-        else: st.info("ไม่มีรายการสินค้า WIP ในคลังขณะนี้")
-
-        st.markdown("##### 📦 2. รายละเอียดสต็อกสินค้า FG (Finished Goods)")
-        if not fg_stock_df.empty:
-            fg_big = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "big"]["Clean_Qty"].sum()
-            fg_small = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "small"]["Clean_Qty"].sum()
-            fg_mix = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "mix"]["Clean_Qty"].sum()
-            fg_f = fg_stock_df[fg_stock_df["Grade"].astype(str).str.strip().str.lower() == "f"]["Clean_Qty"].sum()
-
-            fc1, fc2, fc3, fc4, fc5 = st.columns(5)
-            with fc1: st.metric(label="FG: Big", value=f"{fg_big:,.2f}")
-            with fc2: st.metric(label="FG: Small", value=f"{fg_small:,.2f}")
-            with fc3: st.metric(label="FG: Mix", value=f"{fg_mix:,.2f}")
-            with fc4: st.metric(label="FG: F", value=f"{fg_f:,.2f}")
-            with fc5: st.metric(label="FG Total", value=f"{total_fg:,.2f}")
-            st.dataframe(format_df_quantity(fg_stock_df), use_container_width=True)
-        else: st.info("ไม่มีรายการสินค้า FG ในคลังขณะนี้")
-    else: 
-        st.warning("ยังไม่มีข้อมูลในระบบ")
+        render_section_heading(
+            "รายละเอียดสต็อกทั้งหมด", "ตรวจสอบยอดแต่ละเกรดและรายละเอียดสินค้าแต่ละ Lot แยกตามประเภท",
+            eyebrow="STOCK DETAILS", tone="slate",
+        )
+        for stock_type, stock_df, stock_total, tone, title in (
+            ("WIP", wip_stock_df, total_wip, "amber", "รายละเอียด WIP"),
+            ("FG", fg_stock_df, total_fg, "teal", "รายละเอียด FG"),
+        ):
+            with st.container(key=f"stock_details_{stock_type.lower()}"):
+                description = "งานระหว่างกระบวนการ · Work in Progress" if stock_type == "WIP" else "สินค้าสำเร็จรูป · Finished Goods"
+                render_section_heading(title, description, eyebrow=f"{stock_type} INVENTORY", tone=tone)
+                if not stock_df.empty:
+                    render_grade_summary(stock_df, stock_total, stock_type)
+                    st.caption(f"{len(stock_df):,} รายการ · ยอดรวมทุกเกรด · เลื่อนตารางเพื่อดูรายละเอียดทั้งหมด")
+                    preferred_columns = ["Cultivar Name", "Grade", "Quantity", "THAI STICK Lot. No.", "Status", "Supplier Name"]
+                    display_columns = [column for column in preferred_columns if column in stock_df.columns]
+                    display_columns += [column for column in stock_df.columns if column not in preferred_columns and column != "Clean_Qty"]
+                    st.dataframe(
+                        format_df_quantity(stock_df), width="stretch", hide_index=True,
+                        column_order=display_columns,
+                        height=min(460, 38 * (len(stock_df) + 1) + 4), row_height=38,
+                        column_config={
+                            "Clean_Qty": None,
+                            "Cultivar Name": st.column_config.TextColumn("สายพันธุ์", width="medium"),
+                            "Grade": st.column_config.TextColumn("เกรด", width="small"),
+                            "Quantity": st.column_config.TextColumn("จำนวน (g)", width="small"),
+                            "Supplier Name": st.column_config.TextColumn("ผู้จัดหา", width="medium"),
+                            "THAI STICK Lot. No.": st.column_config.TextColumn("THAI STICK Lot No.", width="medium"),
+                        },
+                    )
+                else:
+                    st.markdown(f'<div class="portal-empty">ยังไม่มีรายการสินค้า {stock_type} คงเหลือในขณะนี้</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="portal-empty">ยังไม่มีข้อมูลสต็อกในระบบ เมื่อบันทึกรับสินค้าแล้ว ยอดคงเหลือจะแสดงที่หน้านี้</div>', unsafe_allow_html=True)
 # ==========================================
 # หน้าที่ 3: Monthly Report
 # ==========================================
