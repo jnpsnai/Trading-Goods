@@ -374,7 +374,18 @@ if menu == "🚨 Delivery Issue":
                 else: bg_color, border_color, text_color, urgency_icon, diff_text = "#bbf7d0", "#4ade80", "#14532d", "📅", f"อีก {diff_days} วัน"
 
                 date_display = f"{urgency_icon} กำหนดส่ง: วัน{thai_day_str}ที่ {d_date} ({diff_text})"
-                st.markdown(f'<div style="background-color: {bg_color}; color: {text_color}; padding: 15px 20px; border-radius: 8px; margin-top: 20px; margin-bottom: 12px; font-weight: bold; font-size: 22px; border-left: 8px solid {border_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">{date_display}</div>', unsafe_allow_html=True)
+                daily_volume_display = (
+                    f"{sub_df[vol_col].apply(clean_quantity).sum():,.2f}"
+                    if vol_col else "ไม่พบคอลัมน์ Volume"
+                )
+                st.markdown(
+                    f'<div class="delivery-day-header" style="background-color: {bg_color}; color: {text_color}; padding: 15px 20px; border-radius: 8px; margin-top: 20px; margin-bottom: 12px; font-weight: bold; font-size: 22px; border-left: 8px solid {border_color}; box-shadow: 0 2px 4px rgba(0,0,0,0.05); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px;">'
+                    f'<span>{date_display}</span>'
+                    f'<div class="delivery-day-volume" style="background-color: rgba(255,255,255,0.65); border: 1px solid {border_color}; border-radius: 8px; padding: 8px 14px;">'
+                    '<div style="font-size: 13px; font-weight: 600;">ยอดรวมส่ง (Volume)</div>'
+                    f'<div style="font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.4;">{daily_volume_display}</div>'
+                    '</div></div>', unsafe_allow_html=True,
+                )
                 st.dataframe(format_df_quantity(sub_display), use_container_width=True)
 
             if not invalid_df.empty:
@@ -485,7 +496,7 @@ elif menu == "📊 Stock Summary & Details":
             min-width: 145px; max-width: 220px; background: var(--tint);
             color: var(--deep); text-align: center; font-size: 12px;
             font-weight: 700; overflow-wrap: anywhere; }
-        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 20px; line-height: 1.5; }
+        .stock-matrix thead th.stock-matrix__cultivar { min-width: 200px; max-width: 260px; font-size: 22px; line-height: 1.5; }
         .stock-matrix th:first-child { position: sticky; left: 0; z-index: 1;
             min-width: 125px; background: #fff; color: #475569;
             text-align: left; white-space: nowrap; box-shadow: 3px 0 8px #0f172a05; }
