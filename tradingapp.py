@@ -2064,6 +2064,7 @@ from copy import deepcopy
 from datetime import date
 from html import escape
 import re
+import math
 from uuid import uuid4
 
 import pandas as pd
@@ -2079,6 +2080,20 @@ from trading_transactions import (
 GRADES = ["BIG", "SMALL", "MIX", "F", "GRADE A", "PREMIUM"]
 MONTHS = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
           "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
+
+
+def availability_total(value):
+    """Read display-only stock totals, including BG: 41,000 | SM: 0 cells."""
+    raw = text(value).replace(",", "")
+    try:
+        amount = float(raw)
+    except (TypeError, ValueError):
+        number = r"[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?"
+        amounts = re.findall(r"[:=]\\s*(" + number + r")", raw)
+        if not amounts:
+            amounts = re.findall(r"(?<![\\w.])(" + number + r")(?![\\w.])", raw)
+        return sum(max(0.0, float(amount)) for amount in amounts if math.isfinite(float(amount)))
+    return max(0.0, amount) if math.isfinite(amount) else 0.0
 
 
 def render_workflow_styles():
@@ -2822,7 +2837,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '2e23e26f984eff5803ef686c5a8309db4dc66b3c0d3dfcc953306385de8de776'
+_embedded_bundle = '9e7a0be8591987fc0e64660fe8717885389dff241179c7bdb97e9b45cc1e58c7'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -2849,7 +2864,7 @@ import logging
 import trading_core as core
 import trading_transactions as transactions
 import trading_requests as requests_service
-from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots, fg_display_lot, first_display_lot
+from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots, fg_display_lot, first_display_lot, availability_total
 
 # ==========================================
 # 1. ตั้งค่าหน้าเว็บ Streamlit (Wide Mode & CSS)
@@ -3188,7 +3203,9 @@ def project_picking_rows(rows, catalog):
         grade = picking_text(row.get("Grade")).upper()
         item_key = (request_id, picking_key(row.get("Cultivar Name")), grade)
         item = catalog.get(item_key[1], {})
-        fg = core.decimal_quantity(item.get("fg_by_grade", {}).get(grade, 0))
+        grade_pending = grade in {"TBD", "TBC"}
+        fg = (sum((core.decimal_quantity(value) for value in item.get("fg_by_grade", {}).values()), core.ZERO)
+              if grade_pending else core.decimal_quantity(item.get("fg_by_grade", {}).get(grade, 0)))
         wip = core.decimal_quantity(item.get("wip_qty", 0))
         required = demand.get(item_key, core.ZERO)
         total, total_shipped = progress[request_id]
@@ -3199,6 +3216,8 @@ def project_picking_rows(rows, catalog):
             status = "ส่งครบแล้ว"
         elif quantity is None or quantity <= 0 or not grade:
             status = "⚠️ กรุณาตรวจสอบข้อมูลคำขอ"
+        elif grade_pending and (fg > 0 or wip > 0):
+            status = "⏳ รอการตัดสินใจเกรดผลิตภัณฑ์"
         elif fg >= required:
             status = "✅ พร้อมส่ง"
         elif wip > 0:
@@ -3449,7 +3468,7 @@ def render_picking_manager(spreadsheet, catalog):
 def find_delivery_column(columns, field):
     aliases = {
         "Cultivar Name": ["Cultivar Name", "Cultivar", "Cultivar / Product", "Product", "ชื่อ"],
-        "Grade": ["Grade", "Size"],
+        "Grade": ["Grade", "Size", "เกรด"],
         "Consignee": ["Consignee", "Consignee (ปลายทาง)"],
         "True Consignee": ["True Consignee", "True_Consignee", "True Consignee (ปลายทางจริง)"],
         "Supplier Name": ["Supplier Name", "Supplier"],
@@ -4031,16 +4050,19 @@ try:
             fg_col = next((c for c in df_del.columns if "available fg" in str(c).lower()), None)
             wip_col = next((c for c in df_del.columns if "available wip" in str(c).lower()), None)
 
-            if vol_col and fg_col:
+            grade_col = find_delivery_column(df_del.columns, "Grade")
+            if vol_col and (fg_col or wip_col):
                 def check_readiness(row):
                     if row.get("_Delivery_Source") == "picking":
                         return row["Status (ความพร้อม)"]
                     vol = clean_quantity(row.get(vol_col, 0))
                     onhand = clean_quantity(row.get(fg_col, 0))
-                    wip_val = str(row.get(wip_col, "")).replace(",", "") if wip_col else "0"
-                    wip_numbers = re.findall(r"[-+]?\d*\.\d+|\d+", wip_val)
-                    total_wip = sum([float(n) for n in wip_numbers]) if wip_numbers else 0.0
+                    total_wip = availability_total(row.get(wip_col, 0)) if wip_col else 0.0
+                    grade_pending = picking_key(row.get(grade_col)) in {"tbd", "tbc"}
+                    available_fg = availability_total(row.get(fg_col, 0)) if fg_col else 0.0
 
+                    if vol > 0 and grade_pending and (available_fg > 0 or total_wip > 0):
+                        return "⏳ รอการตัดสินใจเกรดผลิตภัณฑ์"
                     if vol > 0 and onhand >= vol: return "✅ พร้อมส่ง"
                     elif vol > 0 and total_wip > 0: return "📦 รอแพ็ค"
                     elif vol > 0: return "📥 รอรับเข้าสินค้า"
@@ -4129,6 +4151,7 @@ try:
                     status_styles = {
                         "✅ พร้อมส่ง": "background-color: #ecfdf5; color: #047857; font-weight: 600",
                         "📦 รอแพ็ค": "background-color: #fffbeb; color: #92400e; font-weight: 600",
+                        "⏳ รอการตัดสินใจเกรดผลิตภัณฑ์": "background-color: #f5f3ff; color: #6d28d9; font-weight: 600",
                         "📥 รอรับเข้าสินค้า": "background-color: #eff6ff; color: #1d4ed8; font-weight: 600",
                         "➖ N/A": "background-color: #f1f5f9; color: #475569",
                     }
@@ -4138,7 +4161,7 @@ try:
                     column_config={
                         "Cultivar Name": st.column_config.TextColumn("สายพันธุ์ / สินค้า", width="medium"),
                         "Grade": st.column_config.TextColumn("เกรด", width="small"),
-                        "Status (ความพร้อม)": st.column_config.TextColumn("ความพร้อม", width="medium"),
+                        "Status (ความพร้อม)": st.column_config.TextColumn("ความพร้อม", width="large"),
                         "WIP Lot No.": None,
                         "FG Lot No.": st.column_config.TextColumn("FG Lot No.", width="medium"),
                     },
