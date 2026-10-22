@@ -2333,77 +2333,70 @@ def fg_display_lot(value):
 
 
 def delivery_internal_lots(frame, main_records, packing_records):
-    """Prefer generated FG lots over any reference to their source WIP lots."""
+    """Propose WIP/FG lots from Sheet 1, then Source WIP Lot for missing FG."""
     normalize = lambda value: "".join(character for character in key(value) if character.isalnum())
-    lot_columns = [column for column in frame if normalize(column) in {
-        "lot", "lotno", "supplierlotno", "thaisticklotno", "generatedfglotno"}]
-    internal_columns = [column for column in lot_columns if normalize(column) == "thaisticklotno"]
-    generated_columns = [column for column in lot_columns if normalize(column) == "generatedfglotno"]
+    unknown = {"", "tbc", "tbd", "na", "none"}
 
     def field(record, aliases):
-        names = {normalize(alias) for alias in aliases}
-        return next((text(value) for header, value in record.items()
-                     if normalize(header) in names and text(value)), "")
+        for alias in aliases:
+            for header, value in record.items():
+                if normalize(header) == normalize(alias) and text(value):
+                    return text(value)
+        return ""
 
-    def same_product(row, record):
-        aliases = ("Cultivar Name", "Cultivar", "Cultivar / Product", "Product", "ชื่อสายพันธุ์")
-        cultivar = field(row, aliases)
-        if key(cultivar) in {"", "tbc", "tbd", "-", "—"} or key(cultivar) != key(field(record, aliases)):
-            return False
-        grade = field(row, ("Grade", "Size", "เกรด"))
-        if key(grade) not in {"", "tbc", "tbd", "-", "—"} and key(grade) != key(field(record, ("Grade", "Size", "เกรด"))):
-            return False
-        supplier = field(row, ("Supplier Name", "Supplier"))
-        actual = field(record, ("Supplier Name", "Supplier"))
-        return not supplier or bool(parts(supplier) & parts(actual))
+    cultivar_aliases = ("Cultivar Name", "Cultivar", "Cultivar / Product", "Product", "สายพันธุ์", "ชื่อสายพันธุ์")
 
-    def parts(value):
-        return {key(value), *(key(part) for part in re.split(r"[,;|+/\\r\\n]+", text(value)) if text(part))}
+    def names(record):
+        return {value for value in (normalize(field(record, cultivar_aliases)),
+                                   normalize(field(record, ("Export Name",)))) if value not in unknown}
+
+    def internal(record):
+        return field(record, ("THAI STICK Lot. No.",))
+
+    def tokens(value):
+        return {key(part) for part in re.split(r"[,;|+/\\r\\n]+", text(value)) if normalize(part) not in unknown}
+
+    def first_internal(records):
+        for record in records:
+            lot = first_display_lot(internal(record))
+            if normalize(lot) not in unknown:
+                return lot
+        return ""
 
     def resolve(row):
-        generated = next((text(row.get(column)) for column in generated_columns if text(row.get(column))), "")
-        if generated:
-            return fg_display_lot(generated)
-        # An explicit internal lot entered on this row is authoritative. Do not
-        # replace it by recomputing a list from other stock or supplier records.
-        direct = next((text(row.get(column)) for column in internal_columns if text(row.get(column))), "")
-        if direct:
-            return fg_display_lot(direct)
-        reference_columns = sorted(lot_columns, key=lambda column: normalize(column) == "supplierlotno")
-        reference = next((first_display_lot(row.get(column)) for column in reference_columns if text(row.get(column))), "")
-        references = {key(reference)} if reference else set()
-        if not references:
-            return "—"
-        matches = []
-        for record in packing_records:
-            generated = next((text(value) for header, value in record.items() if normalize(header) == "generatedfglotno"), "")
-            candidates = parts(record.get("Source WIP Lot")) | {key(generated), key(fg_display_lot(generated))}
-            if generated and references & candidates and same_product(row, record):
-                display = fg_display_lot(generated)
-                if display not in matches:
-                    matches.append(display)
-        if matches:
-            return first_display_lot(matches[0])
-        for record in main_records:
-            internal = text(record.get("THAI STICK Lot. No."))
-            candidates = {key(internal), key(record.get("Supplier Lot. No."))}
-            if internal and "fg" in key(record.get("Category")) and references & candidates and same_product(row, record):
-                generated = next((text(value) for header, value in record.items() if normalize(header) == "generatedfglotno"), "")
-                display = fg_display_lot(generated or internal) if "fg" in key(record.get("Category")) else internal
-                if display not in matches:
-                    matches.append(display)
-        if matches:
-            return first_display_lot(matches[0])
-        # A cached WIP list is not proof of an FG lot. Never echo it on a failed match.
-        return "—"
+        wanted = normalize(field(row, cultivar_aliases + ("Export Name",)))
+        if wanted in unknown:
+            return "—", "—"
+        matching = [record for record in main_records if wanted in names(record)]
+        wip_records = [record for record in matching if normalize(field(record, ("Category",))).startswith("wip")]
+        fg_records = [record for record in matching if normalize(field(record, ("Category",))).startswith("fg")]
+        wip = first_internal(wip_records)
+        fg = first_internal(fg_records)
+        if not fg:
+            source_lots = set().union(*(tokens(internal(record)) for record in wip_records))
+            wanted_names = {wanted}.union(*(names(record) for record in matching))
+            for record in packing_records:
+                source = field(record, ("Source WIP Lot", "Source WIP Lot No."))
+                if not source:
+                    continue
+                identities = names(record)
+                # Named packing rows must match their own cultivar. Only unnamed
+                # rows use the join: cultivar -> Sheet 1 WIP lot -> source lot.
+                matches = bool(wanted_names & identities) or (not identities and bool(source_lots & tokens(source)))
+                if not identities and normalize(source) == wanted:
+                    matches = True
+                if matches:
+                    fg = first_display_lot(source)
+                    break
+        return wip or "—", fg or "—"
 
+    lot_columns = [column for column in frame if normalize(column) in {
+        "lot", "lotno", "supplierlotno", "thaisticklotno", "generatedfglotno", "wiplotno", "fglotno"}]
+    position = min((list(frame.columns).index(column) for column in lot_columns), default=len(frame.columns))
     result = frame.drop(columns=lot_columns).copy()
-    result["THAI STICK Lot No."] = frame.apply(resolve, axis=1) if not frame.empty else pd.Series(dtype=str)
-    if lot_columns:
-        position = min(list(frame.columns).index(column) for column in lot_columns)
-        columns = list(result.columns)
-        columns.insert(min(position, len(columns) - 1), columns.pop())
-        result = result[columns]
+    proposals = [resolve(row) for row in frame.to_dict("records")]
+    result.insert(min(position, len(result.columns)), "WIP Lot No.", [value[0] for value in proposals])
+    result.insert(min(position + 1, len(result.columns)), "FG Lot No.", [value[1] for value in proposals])
     return result
 
 
@@ -2829,7 +2822,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '2ec212540a5577aab05662d6da89a0ccd3ea95cbf9710689dc4256da32829b02'
+_embedded_bundle = '2e23e26f984eff5803ef686c5a8309db4dc66b3c0d3dfcc953306385de8de776'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -4112,6 +4105,8 @@ try:
                 with summary_cols[3]:
                     st.metric("รอยืนยันวันส่ง (TBC) · รายการ", f"{int(df_del['Is_Unscheduled'].sum()):,}" if date_col else "—")
 
+            st.caption("ล็อตเสนอ: WIP และ FG ค้นจาก Category ใน Sheet 1 ก่อน · FG ที่ไม่พบใช้ Source WIP Lot จาก Packing_Records · แสดงล็อตแรกในเซลล์")
+
             def display_delivery_table(frame):
                 display_frame = format_df_quantity(delivery_internal_lots(
                     frame, get_cached_data("main", sheet), get_cached_data("packing", packing_records_sheet),
@@ -4130,6 +4125,8 @@ try:
                         "Cultivar Name": st.column_config.TextColumn("สายพันธุ์ / สินค้า", width="medium"),
                         "Grade": st.column_config.TextColumn("เกรด", width="small"),
                         "Status (ความพร้อม)": st.column_config.TextColumn("ความพร้อม", width="medium"),
+                        "WIP Lot No.": st.column_config.TextColumn("WIP Lot No.", width="medium"),
+                        "FG Lot No.": st.column_config.TextColumn("FG Lot No.", width="medium"),
                     },
                 )
 
