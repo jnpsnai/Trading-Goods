@@ -4105,16 +4105,25 @@ try:
                 with summary_cols[3]:
                     st.metric("รอยืนยันวันส่ง (TBC) · รายการ", f"{int(df_del['Is_Unscheduled'].sum()):,}" if date_col else "—")
 
-            st.caption("ล็อตเสนอ: WIP และ FG ค้นจาก Category ใน Sheet 1 ก่อน · FG ที่ไม่พบใช้ Source WIP Lot จาก Packing_Records · แสดงล็อตแรกในเซลล์")
+            st.caption("FG Lot No. ใช้ล็อต WIP ก่อนเมื่อพบ มิฉะนั้นใช้ล็อต FG · หากไม่พบทั้งสองแบบจะแสดง -")
 
             def display_delivery_table(frame):
                 display_frame = format_df_quantity(delivery_internal_lots(
                     frame, get_cached_data("main", sheet), get_cached_data("packing", packing_records_sheet),
                 ))
+                missing_lots = {"", "-", "—", "n/a", "na", "tbc", "tbd"}
+                wip_lots = display_frame["WIP Lot No."].map(picking_text)
+                fg_lots = display_frame["FG Lot No."].map(picking_text)
+                display_frame["FG Lot No."] = wip_lots.where(
+                    ~wip_lots.map(picking_key).isin(missing_lots),
+                    fg_lots.where(~fg_lots.map(picking_key).isin(missing_lots), "-"),
+                )
                 hidden_columns = [find_delivery_column(display_frame.columns, field)
                                   for field in ["Expected Shipping Date", "Type", "Consignee"]]
-                hidden_columns += [column for column in display_frame.columns
-                                   if re.sub(r"[^a-z0-9]", "", str(column).casefold()) == "permitno"]
+                for column in display_frame.columns:
+                    column_key = re.sub(r"[^a-z0-9]", "", str(column).casefold())
+                    if column_key == "permitno" or ("wip" in column_key and ("lot" in column_key or "code" in column_key or column_key == "wipno")):
+                        hidden_columns.append(column)
                 display_frame = display_frame.drop(columns=hidden_columns, errors="ignore")
                 if "Status (ความพร้อม)" in display_frame.columns:
                     status_styles = {
@@ -4130,7 +4139,7 @@ try:
                         "Cultivar Name": st.column_config.TextColumn("สายพันธุ์ / สินค้า", width="medium"),
                         "Grade": st.column_config.TextColumn("เกรด", width="small"),
                         "Status (ความพร้อม)": st.column_config.TextColumn("ความพร้อม", width="medium"),
-                        "WIP Lot No.": st.column_config.TextColumn("WIP Lot No.", width="medium"),
+                        "WIP Lot No.": None,
                         "FG Lot No.": st.column_config.TextColumn("FG Lot No.", width="medium"),
                     },
                 )
