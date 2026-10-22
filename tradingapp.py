@@ -2319,9 +2319,17 @@ def render_numeric_dataframe(data, *, column_config=None, **kwargs):
     return st.dataframe(data, column_config=config, **kwargs)
 
 
+def first_display_lot(value):
+    """Read the first lot in the cell, preserving the sheet's original order."""
+    raw = text(value)
+    if key(raw) in {"n/a", "na", "tbc", "tbd", "-", "—"}:
+        return raw
+    return next((part.strip() for part in re.split(r"[,;|+/\\r\\n]+", raw) if part.strip()), "")
+
+
 def fg_display_lot(value):
     """Strip only the terminal packing sequence and grade; stored lot is intact."""
-    return re.sub(r"-FG\\d+-[^\\r\\n]+$", "", text(value), flags=re.IGNORECASE)
+    return re.sub(r"-FG\\d+-[^\\r\\n]+$", "", first_display_lot(value), flags=re.IGNORECASE)
 
 
 def delivery_internal_lots(frame, main_records, packing_records):
@@ -2350,13 +2358,20 @@ def delivery_internal_lots(frame, main_records, packing_records):
         return not supplier or bool(parts(supplier) & parts(actual))
 
     def parts(value):
-        return {key(value), *(key(part) for part in re.split(r"[,;|+]|\\s+/\\s+", text(value)) if text(part))}
+        return {key(value), *(key(part) for part in re.split(r"[,;|+/\\r\\n]+", text(value)) if text(part))}
 
     def resolve(row):
         generated = next((text(row.get(column)) for column in generated_columns if text(row.get(column))), "")
         if generated:
             return fg_display_lot(generated)
-        references = set().union(*(parts(row.get(column)) for column in lot_columns if text(row.get(column))))
+        # An explicit internal lot entered on this row is authoritative. Do not
+        # replace it by recomputing a list from other stock or supplier records.
+        direct = next((text(row.get(column)) for column in internal_columns if text(row.get(column))), "")
+        if direct:
+            return fg_display_lot(direct)
+        reference_columns = sorted(lot_columns, key=lambda column: normalize(column) == "supplierlotno")
+        reference = next((first_display_lot(row.get(column)) for column in reference_columns if text(row.get(column))), "")
+        references = {key(reference)} if reference else set()
         if not references:
             return "—"
         matches = []
@@ -2368,7 +2383,7 @@ def delivery_internal_lots(frame, main_records, packing_records):
                 if display not in matches:
                     matches.append(display)
         if matches:
-            return " / ".join(matches)
+            return first_display_lot(matches[0])
         for record in main_records:
             internal = text(record.get("THAI STICK Lot. No."))
             candidates = {key(internal), key(record.get("Supplier Lot. No."))}
@@ -2378,7 +2393,7 @@ def delivery_internal_lots(frame, main_records, packing_records):
                 if display not in matches:
                     matches.append(display)
         if matches:
-            return " / ".join(matches)
+            return first_display_lot(matches[0])
         # A cached WIP list is not proof of an FG lot. Never echo it on a failed match.
         return "—"
 
@@ -2814,7 +2829,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '8e22d172e615238e8b47d612679ee9c58baef5fcd84660ee51d9bef93c4175d2'
+_embedded_bundle = '2ec212540a5577aab05662d6da89a0ccd3ea95cbf9710689dc4256da32829b02'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -2841,7 +2856,7 @@ import logging
 import trading_core as core
 import trading_transactions as transactions
 import trading_requests as requests_service
-from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots, fg_display_lot
+from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots, fg_display_lot, first_display_lot
 
 # ==========================================
 # 1. ตั้งค่าหน้าเว็บ Streamlit (Wide Mode & CSS)
@@ -3011,6 +3026,11 @@ def format_df_quantity(frame):
     result = frame.copy()
     for column in result:
         name = str(column).casefold()
+        normalized = re.sub(r"[^a-z0-9]", "", name)
+        if normalized == "thaisticklotno":
+            result[column] = result[column].map(first_display_lot)
+        elif normalized == "generatedfglotno":
+            result[column] = result[column].map(fg_display_lot)
         if any(word in name for word in ["date", "วันที่", "timestamp"]):
             def display_date(value):
                 if not core.text(value) or core.key(value) in core.PENDING_VALUES:
