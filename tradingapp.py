@@ -439,7 +439,7 @@ from trading_core import (
     MAIN_HEADERS, PACK_HEADERS, PACK_LOG_HEADERS, SHIP_HEADERS,
     MAIN_META_HEADERS, PACK_META_HEADERS, MOVEMENT_HEADERS, TRANSACTION_HEADERS,
     ValidationError, decimal_quantity, inventory_from_records, key, now_bangkok,
-    parse_date, read_records, text, today_bangkok, number,
+    parse_date, parse_sheet, read_records, text, today_bangkok, number,
 )
 
 
@@ -615,19 +615,10 @@ class MutationContext:
                 self.plans[title] = plan
                 self.ensure_columns(plan, headers)
                 return plan
-            headers = [text(value) for value in raw[0]]
-            if len(headers) != len(set(headers)) or any(not header for header in headers):
-                raise ValidationError(f"หัวตาราง {title} ซ้ำหรือมีชื่อว่าง กรุณาตรวจสอบชีต")
-            missing = [header for header in base_headers if header not in headers]
-            if missing:
-                raise ValidationError(f"หัวตาราง {title} ไม่ครบ: {', '.join(missing)}")
-            records = []
-            for row_number, values in enumerate(raw[1:], start=2):
-                if not any(text(value) for value in values):
-                    continue
-                record = {header: values[index] if index < len(values) else "" for index, header in enumerate(headers)}
-                record["Original_Row_Index"] = row_number
-                records.append(record)
+            # Apply the same strict schema checks on the fresh write snapshot.
+            # In particular, never append metadata headers above existing data
+            # in an unnamed column, or accept ambiguous/reserved header names.
+            headers, records = parse_sheet(raw, base_headers, sheet_name=title)
             plan = WorksheetPlan(title, int(worksheet.id), headers, records, worksheet, int(worksheet.col_count))
         self.plans[title] = plan
         self.ensure_columns(plan, optional_headers)
@@ -2646,7 +2637,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '0e0e96a149797ace41c4b435c7dcb9cfe8984f47c952ac70235289e98a5eda20'
+_embedded_bundle = '067f61c939a1983bfdeefaaf1df7ff56baeb171a5f963276becdb7d95fc8664a'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
