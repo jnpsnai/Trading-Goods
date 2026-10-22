@@ -2186,7 +2186,7 @@ def _multi(draft, name, label, options, format_func=None):
 
 def _fmt(value):
     try:
-        return "—" if pd.isna(value) else f"{float(value):,.2f}"
+        return "—" if pd.isna(value) else f"{float(value):,.0f}"
     except (ValueError, TypeError):
         return "—"
 
@@ -2210,10 +2210,67 @@ def _render_table(frame, *, columns=None, height=None):
         return
     if columns:
         frame = frame[[column for column in columns if column in frame]]
-    config = {column: st.column_config.NumberColumn(column, format="%.2f")
-              for column in frame if pd.api.types.is_numeric_dtype(frame[column])}
     options = {"height": height} if height is not None else {}
-    st.dataframe(frame, width="stretch", hide_index=True, column_config=config, **options)
+    render_numeric_dataframe(frame, width="stretch", hide_index=True, **options)
+
+
+def render_numeric_dataframe(data, *, column_config=None, **kwargs):
+    """Format numeric cells only; retain numeric sorting and original precision."""
+    frame = data if isinstance(data, pd.DataFrame) else data.data
+    config = dict(column_config or {})
+    for column in frame:
+        if not pd.api.types.is_numeric_dtype(frame[column]) or pd.api.types.is_bool_dtype(frame[column]):
+            continue
+        if column in config and config[column] is None:
+            continue
+        previous = config.get(column)
+        if isinstance(previous, dict):
+            previous = dict(previous)
+            settings = dict(previous.get("type_config") or {})
+            if settings.get("type", "number") != "number":
+                continue
+            settings.update(type="number", format="%,.0f")
+            previous["type_config"] = settings
+            config[column] = previous
+        else:
+            config[column] = st.column_config.NumberColumn(previous or str(column), format="%,.0f")
+    return st.dataframe(data, column_config=config, **kwargs)
+
+
+def delivery_internal_lots(frame, main_records, packing_records):
+    """Resolve display lots from internal lot fields, never echo supplier lots."""
+    normalize = lambda value: "".join(character for character in str(value).casefold() if character.isalnum())
+    lot_columns = [column for column in frame if normalize(column) in {"lot", "lotno", "supplierlotno", "thaisticklotno"}]
+    internal_columns = [column for column in lot_columns if normalize(column) == "thaisticklotno"]
+    reference_columns = [column for column in lot_columns if column not in internal_columns]
+    stock = [(row, text(row.get("THAI STICK Lot. No.")), text(row.get("Supplier Lot. No."))) for row in main_records]
+    stock += [(row, text(row.get("Generated FG Lot No.")), text(row.get("Source WIP Lot"))) for row in packing_records]
+
+    def resolve(row):
+        direct = next((text(row.get(column)) for column in internal_columns if text(row.get(column))), "")
+        if direct:
+            return direct
+        reference = next((text(row.get(column)) for column in reference_columns if text(row.get(column))), "")
+        if not reference:
+            return "—"
+        matches = []
+        for record, internal, supplier_lot in stock:
+            if not internal or key(reference) not in {key(internal), key(supplier_lot)}:
+                continue
+            if any(text(row.get(field)) and key(row[field]) != key(record.get(field)) for field in ("Cultivar Name", "Grade", "Supplier Name")):
+                continue
+            if internal not in matches:
+                matches.append(internal)
+        return " / ".join(matches) or "—"
+
+    result = frame.drop(columns=lot_columns).copy()
+    result["THAI STICK Lot No."] = frame.apply(resolve, axis=1) if not frame.empty else pd.Series(dtype=str)
+    if lot_columns:
+        position = min(list(frame.columns).index(column) for column in lot_columns)
+        columns = list(result.columns)
+        columns.insert(min(position, len(columns) - 1), columns.pop())
+        result = result[columns]
+    return result
 
 
 def _parse_optional(value):
@@ -2637,7 +2694,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '067f61c939a1983bfdeefaaf1df7ff56baeb171a5f963276becdb7d95fc8664a'
+_embedded_bundle = '5d22b57d60daf865043d5c9fd2141d57a41262418bd4fa8094089080e167e816'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -2664,7 +2721,7 @@ import logging
 import trading_core as core
 import trading_transactions as transactions
 import trading_requests as requests_service
-from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page
+from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots
 
 # ==========================================
 # 1. ตั้งค่าหน้าเว็บ Streamlit (Wide Mode & CSS)
@@ -3178,7 +3235,7 @@ def render_picking_manager(spreadsheet, catalog):
                     "Line ID": None,
                     "Cultivar Name": st.column_config.SelectboxColumn("สายพันธุ์", options=options, required=True, width="medium"),
                     "Grade": st.column_config.TextColumn("เกรด FG", required=True, width="small"),
-                    "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%.2f", required=True),
+                    "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%,.0f", required=True),
                     "Consignee": st.column_config.TextColumn("Consignee", required=True, width="medium"),
                     "True Consignee": st.column_config.TextColumn("True Consignee", required=True, width="medium"),
                     "Project Owner": st.column_config.TextColumn("Project Owner", required=True, width="medium"),
@@ -3201,7 +3258,7 @@ def render_picking_manager(spreadsheet, catalog):
                     for line in lines
                 ], catalog)
                 st.markdown("**ความพร้อมหลังแก้ไข เทียบ On hand ปัจจุบัน**")
-                st.dataframe(
+                render_numeric_dataframe(
                     format_df_quantity(pd.DataFrame(preview)), width="stretch", hide_index=True,
                     column_order=["Cultivar Name", "Grade", "Volume", "Supplier Name", "Project Owner", "Type", "Expected Shipping Date", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)"],
                     column_config={"Cultivar Name": "สายพันธุ์", "Grade": "เกรด FG", "Volume": "จำนวนส่ง",
@@ -3232,7 +3289,7 @@ def render_picking_manager(spreadsheet, catalog):
         else:
             st.markdown(f"**ยกเลิก Request: {request_id}**")
             volume = sum(picking_quantity(row.get("Volume")) or 0 for row in manager["expected"])
-            st.warning(f"จะยกเลิกทั้งคำขอ {len(manager['expected']):,} รายการ รวม Volume {volume:,.2f} และนำรายการเหล่านี้ออกจาก Delivery Issue ประวัติการส่งที่เกิดขึ้นแล้วจะยังตรวจสอบได้")
+            st.warning(f"จะยกเลิกทั้งคำขอ {len(manager['expected']):,} รายการ รวม Volume {volume:,.0f} และนำรายการเหล่านี้ออกจาก Delivery Issue ประวัติการส่งที่เกิดขึ้นแล้วจะยังตรวจสอบได้")
             confirmed = st.checkbox(f"ยืนยันว่าต้องการยกเลิก {request_id}", key=f"picking_delete_confirm_{token}")
             delete_col, cancel_col = st.columns([2, 1])
             with delete_col:
@@ -3454,7 +3511,7 @@ def render_grade_summary(stock_df, total, stock_type):
     content = [f'<dl class="portal-grade-grid portal-grade-grid--{stock_type.lower()}">']
     for label, quantity in items:
         css = " portal-grade--total" if label == f"รวม {stock_type}" else ""
-        content.append(f'<div class="portal-grade{css}"><dt>{escape(str(label))}</dt><dd>{quantity:,.2f} <small>g</small></dd></div>')
+        content.append(f'<div class="portal-grade{css}"><dt>{escape(str(label))}</dt><dd>{quantity:,.0f} <small>g</small></dd></div>')
     st.markdown("".join(content) + "</dl>", unsafe_allow_html=True)
 
 
@@ -3765,7 +3822,7 @@ def render_registration_selected(current):
         '<section class="registration-selected"><div><div class="registration-selected__label">ล็อตที่กำลังแก้ไข</div>'
         f'<h2>{escape(cultivar)}</h2><p>Lot {escape(lot)} · {escape(supplier)}</p>'
         f'<p>{escape(category)} · เกรด {escape(grade)}</p></div>'
-        f'<div class="registration-selected__quantity"><strong>{quantity:,.2f} g</strong><small>จำนวนคงเหลือปัจจุบัน</small></div></section>',
+        f'<div class="registration-selected__quantity"><strong>{quantity:,.0f} g</strong><small>จำนวนคงเหลือปัจจุบัน</small></div></section>',
         unsafe_allow_html=True,
     )
 
@@ -3902,7 +3959,7 @@ try:
                 with summary_cols[0]:
                     st.metric("วันจัดส่งที่กำหนดแล้ว", f"{scheduled_rows['Parsed_Delivery_Date'].nunique():,}" if date_col else "—", help="จำนวนวันส่งที่มีวันที่ถูกต้อง รวมวันที่ผ่านมาแล้ว")
                 with summary_cols[1]:
-                    st.metric("ยอดส่งตามกำหนด (Volume)", f"{sum((clean_quantity(value) for value in scheduled_rows[vol_col]), 0.0):,.2f}" if date_col and vol_col else "—", help="ยอดรวม Volume ของรายการที่มีวันจัดส่ง ไม่รวม TBC")
+                    st.metric("ยอดส่งตามกำหนด (Volume)", f"{sum((clean_quantity(value) for value in scheduled_rows[vol_col]), 0.0):,.0f}" if date_col and vol_col else "—", help="ยอดรวม Volume ของรายการที่มีวันจัดส่ง ไม่รวม TBC")
                 with summary_cols[2]:
                     ready_count = int(scheduled_rows["Status (ความพร้อม)"].eq("✅ พร้อมส่ง").sum()) if "Status (ความพร้อม)" in scheduled_rows else None
                     st.metric("พร้อมส่งตามกำหนด · รายการ", f"{ready_count:,}" if date_col and ready_count is not None else "—")
@@ -3910,7 +3967,9 @@ try:
                     st.metric("รอยืนยันวันส่ง (TBC) · รายการ", f"{int(df_del['Is_Unscheduled'].sum()):,}" if date_col else "—")
 
             def display_delivery_table(frame):
-                display_frame = format_df_quantity(frame)
+                display_frame = format_df_quantity(delivery_internal_lots(
+                    frame, get_cached_data("main", sheet), get_cached_data("packing", packing_records_sheet),
+                ))
                 if "Status (ความพร้อม)" in display_frame.columns:
                     status_styles = {
                         "✅ พร้อมส่ง": "background-color: #ecfdf5; color: #047857; font-weight: 600",
@@ -3919,7 +3978,7 @@ try:
                         "➖ N/A": "background-color: #f1f5f9; color: #475569",
                     }
                     display_frame = display_frame.style.map(lambda value: status_styles.get(str(value), ""), subset=["Status (ความพร้อม)"])
-                st.dataframe(
+                render_numeric_dataframe(
                     display_frame, width="stretch", hide_index=True,
                     column_config={
                         "Cultivar Name": st.column_config.TextColumn("สายพันธุ์ / สินค้า", width="medium"),
@@ -3946,7 +4005,7 @@ try:
                             grade_column = find_delivery_column(df_del.columns, "Grade")
                             item_grade = picking_text(r.get(grade_column)) or "-"
 
-                            try: vol_disp = f"{float(vol):,.2f}" if float(vol) % 1 != 0 else f"{int(vol):,}"
+                            try: vol_disp = f"{float(vol):,.0f}" if float(vol) % 1 != 0 else f"{int(vol):,}"
                             except: vol_disp = str(vol)
 
                             disp_txt = f"บรรทัด {row_idx} | {item_name} (Grade: {item_grade}) | วันเดิม: {curr_dt} | Volume: {vol_disp}"
@@ -4059,7 +4118,7 @@ try:
                         else:
                             day_tone, diff_text = "scheduled", f"อีก {diff_days} วัน"
                         daily_volume_display = (
-                            f"{sum((clean_quantity(value) for value in sub_df[vol_col]), 0.0):,.2f}"
+                            f"{sum((clean_quantity(value) for value in sub_df[vol_col]), 0.0):,.0f}"
                             if vol_col else "ไม่พบคอลัมน์ Volume"
                         )
                         with st.container(border=True):
@@ -4231,7 +4290,7 @@ try:
                     column_config={
                         "Cultivar Name": st.column_config.SelectboxColumn("สายพันธุ์", options=selected_cultivars, required=True, width="medium"),
                         "Grade": st.column_config.TextColumn("เกรด FG ที่ต้องส่ง", required=True, width="small"),
-                        "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%.2f", required=True),
+                        "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%,.0f", required=True),
                         "Consignee": st.column_config.TextColumn("Consignee", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
                         "True Consignee": st.column_config.TextColumn("True Consignee", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
                         "Project Owner": st.column_config.TextColumn("Project Owner", help="เว้นว่างเพื่อใช้ค่าเริ่มต้นด้านบน", width="medium"),
@@ -4258,7 +4317,7 @@ try:
                     st.caption("กรอกเกรดและจำนวนที่มากกว่า 0 ให้ครบเพื่อดูความพร้อมของ FG")
                 else:
                     st.markdown("**ความพร้อมตาม On hand ปัจจุบัน**")
-                    st.dataframe(
+                    render_numeric_dataframe(
                         format_df_quantity(pd.DataFrame(preview_rows)), width="stretch", hide_index=True,
                         column_order=["Cultivar Name", "Grade", "Volume", "Supplier Name", "Project Owner", "Type", "Request Demand", "Available FG", "Available WIP", "FG Shortfall", "Status (ความพร้อม)"],
                         column_config={
@@ -4309,7 +4368,7 @@ try:
                 request_ids.reverse()
                 history_id = st.selectbox("เลือก Request เพื่อดูรายละเอียด", request_ids, key="picking_history_request", disabled=bool(st.session_state.get("picking_manage")))
                 selected_history = [row for row in projected_history if str(row.get("Request ID", "")) == history_id]
-                st.dataframe(
+                render_numeric_dataframe(
                     format_df_quantity(pd.DataFrame(selected_history)), width="stretch", hide_index=True,
                     column_order=["Cultivar Name", "Grade", "Volume", "Shipped Volume", "Remaining Volume", "Expected Shipping Date", "Request Status", "Status (ความพร้อม)"],
                     column_config={
@@ -4321,7 +4380,7 @@ try:
                     },
                 )
                 with st.expander("ผู้รับ เจ้าของโครงการ และรายละเอียดเพิ่มเติม"):
-                    st.dataframe(format_df_quantity(pd.DataFrame(selected_history)), width="stretch", hide_index=True,
+                    render_numeric_dataframe(format_df_quantity(pd.DataFrame(selected_history)), width="stretch", hide_index=True,
                                  column_order=["Cultivar Name", "Consignee", "True Consignee", "Project Owner", "Type", "Supplier Name", "Note"])
                 edit_col, delete_col = st.columns(2)
                 with edit_col:
@@ -4428,11 +4487,11 @@ try:
             with st.container(key="stock_overview"):
                 col_m1, col_m2, col_m3 = st.columns(3)
                 with col_m1:
-                    st.metric("สต็อกคงเหลือทั้งหมด", f"{total_on_hand:,.2f} g")
+                    st.metric("สต็อกคงเหลือทั้งหมด", f"{total_on_hand:,.0f} g")
                 with col_m2:
-                    st.metric("งานระหว่างกระบวนการ · WIP", f"{total_wip:,.2f} g")
+                    st.metric("งานระหว่างกระบวนการ · WIP", f"{total_wip:,.0f} g")
                 with col_m3:
-                    st.metric("สินค้าสำเร็จรูป · FG", f"{total_fg:,.2f} g")
+                    st.metric("สินค้าสำเร็จรูป · FG", f"{total_fg:,.0f} g")
 
             wip_share = float(total_wip / total_on_hand * 100) if total_on_hand else 0.0
             fg_share = float(total_fg / total_on_hand * 100) if total_on_hand else 0.0
@@ -4548,7 +4607,7 @@ try:
                     f'<h3 id="matrix-{theme}-title">{stock_type} Matrix Summary</h3>',
                     f'<p class="stock-matrix__description">{description} แยกตามสายพันธุ์และขนาด / เกรด</p></div>',
                     f'<div class="stock-matrix__summary"><div class="stock-matrix__label">ยอดคงเหลือ {stock_type}</div>',
-                    f'<div class="stock-matrix__quantity">{section_total:,.2f} <small>g</small></div>',
+                    f'<div class="stock-matrix__quantity">{section_total:,.0f} <small>g</small></div>',
                     f'<div class="stock-matrix__counts">{cultivar_count:,} สายพันธุ์ &nbsp;·&nbsp; {active_grades:,} เกรดที่มีสต็อก</div></div></header>',
                 ]
                 if pivot_df.empty:
@@ -4571,16 +4630,16 @@ try:
                     for quantity in quantities:
                         if quantity > 0:
                             intensity = 0.04 + 0.20 * float(quantity) / max_quantity
-                            html.append(f'<td class="stock-matrix__value" style="background: rgba(var(--rgb), {intensity:.3f})">{quantity:,.2f}</td>')
+                            html.append(f'<td class="stock-matrix__value" style="background: rgba(var(--rgb), {intensity:.3f})">{quantity:,.0f}</td>')
                         else:
-                            html.append('<td class="stock-matrix__zero"><span aria-hidden="true">—</span><span class="stock-matrix__sr-only">0.00</span></td>')
-                    html.append(f'<td class="stock-matrix__row-total">{quantities.sum():,.2f}</td></tr>')
+                            html.append('<td class="stock-matrix__zero"><span aria-hidden="true">—</span><span class="stock-matrix__sr-only">0</span></td>')
+                    html.append(f'<td class="stock-matrix__row-total">{quantities.sum():,.0f}</td></tr>')
 
                 html.append('</tbody><tfoot><tr><th scope="row">รวมทั้งหมด</th>')
                 for quantity in pivot_df.sum(axis=0):
-                    html.append(f'<td>{quantity:,.2f}</td>')
+                    html.append(f'<td>{quantity:,.0f}</td>')
                 html.extend([
-                    f'<td>{section_total:,.2f}</td></tr></tfoot></table></div>',
+                    f'<td>{section_total:,.0f}</td></tr></tfoot></table></div>',
                     '<footer class="stock-matrix__footer">',
                     '<span class="stock-matrix__legend"><span class="stock-matrix__swatch" aria-hidden="true"></span>สีเข้ม = ปริมาณมาก เทียบภายในแต่ละตาราง</span>',
                     '<span>หน่วย: กรัม (g) &nbsp;·&nbsp; — = ไม่มีสต็อก &nbsp;·&nbsp; เลื่อนตารางเพื่อดูทุกสายพันธุ์</span>',
@@ -4612,7 +4671,7 @@ try:
                         preferred_columns = ["Cultivar Name", "Grade", "Quantity", "THAI STICK Lot. No.", "Status", "Supplier Name"]
                         display_columns = [column for column in preferred_columns if column in stock_df.columns]
                         display_columns += [column for column in stock_df.columns if column not in preferred_columns and column != "Clean_Qty"]
-                        st.dataframe(
+                        render_numeric_dataframe(
                             format_df_quantity(stock_df), width="stretch", hide_index=True,
                             column_order=display_columns,
                             height=min(460, 38 * (len(stock_df) + 1) + 4), row_height=38,
@@ -4620,7 +4679,7 @@ try:
                                 "Clean_Qty": None,
                                 "Cultivar Name": st.column_config.TextColumn("สายพันธุ์", width="medium"),
                                 "Grade": st.column_config.TextColumn("เกรด", width="small"),
-                                "Quantity": st.column_config.NumberColumn("จำนวน (g)", format="localized", width="small"),
+                                "Quantity": st.column_config.NumberColumn("จำนวน (g)", format="%,.0f", width="small"),
                                 "Supplier Name": st.column_config.TextColumn("ผู้จัดหา", width="medium"),
                                 "THAI STICK Lot. No.": st.column_config.TextColumn("THAI STICK Lot No.", width="medium"),
                             },
@@ -4709,7 +4768,7 @@ try:
                             cultivar = picking_text(record.get("Cultivar Name")) or "ไม่ระบุสายพันธุ์"
                             lot = picking_text(record.get("THAI STICK Lot. No.")) or picking_text(record.get("Supplier Lot. No.")) or "ไม่ระบุ Lot"
                             grade = picking_text(record.get("Grade")) or "—"
-                            labels[row_number] = f"{index:02d} · {cultivar} | Lot {lot} | {grade} | {record['Clean_Qty']:,.2f} g"
+                            labels[row_number] = f"{index:02d} · {cultivar} | Lot {lot} | {grade} | {record['Clean_Qty']:,.0f} g"
                         if records_by_row:
                             selected_row = st.selectbox("เลือกล็อตสินค้า", list(records_by_row), format_func=labels.get, key="registration_edit_lot")
                     if not records_by_row:
