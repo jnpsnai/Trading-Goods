@@ -1077,6 +1077,218 @@ def render_grade_summary(stock_df, total, stock_type):
     st.markdown("".join(html), unsafe_allow_html=True)
 
 
+def render_registration_ui_styles():
+    st.markdown("""<style>
+    .st-key-registration_create, .st-key-registration_edit {
+        --reg-accent: #0f766e; --reg-tint: #f0fdfa; --reg-line: #b8e4dc;
+        max-width: 1140px; margin-inline: auto; color: #334155; }
+    .st-key-registration_edit { --reg-accent: #1d4ed8; --reg-tint: #eff6ff; --reg-line: #c7dafa; }
+    :is(.st-key-registration_create, .st-key-registration_edit) .st-key-registration_header h1 {
+        color: #0f172a; font-size: clamp(27px, 2.6vw, 35px); line-height: 1.35;
+        letter-spacing: -.025em; padding: 0 0 8px; }
+    :is(.st-key-registration_create, .st-key-registration_edit) .st-key-registration_header [data-testid="stCaptionContainer"] p {
+        color: #64748b; font-size: 14px; line-height: 1.8; }
+    .registration-eyebrow { margin: 0 0 8px; color: var(--reg-accent);
+        font-size: 11px; letter-spacing: .12em; font-weight: 750; }
+    .registration-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px; margin: 2px 0 16px; }
+    .registration-step { display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+        border: 1px solid #e2e8f0; border-radius: 12px; background: #f8fafc;
+        color: #475569; font-size: 13px; line-height: 1.5; }
+    .registration-step span { display: grid; place-items: center; flex: 0 0 26px;
+        width: 26px; height: 26px; background: #fff; border: 1px solid #dbe4ee;
+        border-radius: 8px; color: var(--reg-accent); font-size: 11px; font-weight: 750; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-testid="stForm"] {
+        background: transparent; border: 0; padding: 0; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [class*="st-key-registration_card_"] {
+        padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px;
+        background: #fff; margin-bottom: 6px; box-shadow: 0 3px 12px #0f172a03; }
+    .registration-card-heading { display: flex; align-items: flex-start; gap: 12px; margin: 0 0 8px; }
+    .registration-card-heading__number { display: grid; place-items: center; width: 34px; height: 34px;
+        flex: 0 0 34px; border: 1px solid var(--reg-line); background: var(--reg-tint);
+        color: var(--reg-accent); font-size: 12px; font-weight: 750; border-radius: 10px; }
+    .registration-card-heading h2 { color: #0f172a; font-size: 19px; line-height: 1.5;
+        font-weight: 700; padding: 0; margin: 0 0 4px; }
+    .registration-card-heading p { color: #64748b; font-size: 13px; line-height: 1.7; margin: 0; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-testid="stWidgetLabel"] p {
+        color: #334155; font-size: 14px; font-weight: 600; line-height: 1.6; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-baseweb="input"],
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-baseweb="select"] > div {
+        border: 1px solid #dbe3ec; border-radius: 10px; background: #f8fafc;
+        min-height: 45px; box-shadow: none; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-baseweb="input"]:focus-within,
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-baseweb="select"]:focus-within > div {
+        border-color: var(--reg-accent); box-shadow: 0 0 0 3px var(--reg-tint); }
+    :is(.st-key-registration_create, .st-key-registration_edit) input {
+        color: #1e293b; font-size: 15px; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-testid="stCaptionContainer"] p {
+        color: #64748b; font-size: 13px; line-height: 1.75; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-testid="stFormSubmitButton"] button {
+        color: #fff; background: var(--reg-accent); border: 1px solid var(--reg-accent);
+        border-radius: 11px; min-height: 48px; padding: 12px 24px; font-weight: 650; box-shadow: none; }
+    :is(.st-key-registration_create, .st-key-registration_edit) [data-testid="stFormSubmitButton"] button:hover {
+        filter: brightness(.93); color: #fff; }
+    .st-key-registration_filter { padding: 20px; border: 1px solid #dbe4ee;
+        background: #f8fafc; border-radius: 14px; margin: 0 0 4px; }
+    .registration-selected { padding: 18px 22px; border: 1px solid var(--reg-line);
+        border-left: 4px solid var(--reg-accent); border-radius: 14px; background: var(--reg-tint);
+        display: flex; justify-content: space-between; align-items: center; gap: 18px; margin: 4px 0 12px; }
+    .registration-selected__label { color: var(--reg-accent); font-size: 11px; font-weight: 700; margin-bottom: 5px; }
+    .registration-selected h2 { margin: 0 0 6px; padding: 0; font-size: 21px; line-height: 1.5;
+        color: #0f172a; overflow-wrap: anywhere; }
+    .registration-selected p { color: #475569; margin: 0; font-size: 13px; line-height: 1.8; overflow-wrap: anywhere; }
+    .registration-selected__quantity { flex-shrink: 0; text-align: right; }
+    .registration-selected__quantity strong { font-size: 25px; color: var(--reg-accent); font-variant-numeric: tabular-nums; }
+    .registration-selected__quantity small { display: block; color: #64748b; font-size: 12px; margin-top: 3px; }
+    .registration-submit-note { color: #64748b; font-size: 13px; line-height: 1.8; padding: 4px 0 8px; }
+    @media (max-width: 740px) {
+        :is(.st-key-registration_create, .st-key-registration_edit) [data-testid="stHorizontalBlock"] {
+            flex-direction: column; gap: 16px; }
+        :is(.st-key-registration_create, .st-key-registration_edit) [data-testid="stColumn"] {
+            width: 100% !important; min-width: 0 !important; flex: 1 1 100% !important; }
+        .registration-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+        .registration-step { padding: 10px; font-size: 12px; gap: 8px; }
+        :is(.st-key-registration_create, .st-key-registration_edit) [class*="st-key-registration_card_"] { padding: 18px 16px; }
+        .registration-card-heading { gap: 10px; }
+        .registration-card-heading h2 { font-size: 18px; }
+        .registration-selected { align-items: flex-start; flex-direction: column; gap: 12px; padding: 16px; }
+        .registration-selected__quantity { text-align: left; }
+        .registration-selected__quantity strong { font-size: 23px; }
+        .st-key-registration_filter { padding: 16px; }
+    }
+    </style>""", unsafe_allow_html=True)
+
+
+def render_registration_steps():
+    labels = ["ข้อมูลสินค้า", "Supplier และ Lot", "รับเข้าและจำนวน", "ตรวจสอบและแผนส่ง"]
+    st.markdown('<nav class="registration-steps" aria-label="ส่วนของแบบฟอร์ม">' + ''.join(
+        f'<div class="registration-step"><span>{index:02d}</span>{label}</div>'
+        for index, label in enumerate(labels, start=1)
+    ) + '</nav>', unsafe_allow_html=True)
+
+
+def registration_card_heading(number, title, description):
+    st.markdown(
+        f'<header class="registration-card-heading"><span class="registration-card-heading__number">{number:02d}</span>'
+        f'<div><h2>{escape(title)}</h2><p>{escape(description)}</p></div></header>',
+        unsafe_allow_html=True,
+    )
+
+
+def registration_date(value):
+    parsed = parse_delivery_date(picking_text(value))
+    return parsed.date() if pd.notna(parsed) else datetime.now(ZoneInfo("Asia/Bangkok")).date()
+
+
+def render_registration_form(editing=False, current_data=None, row_number=None):
+    current = dict(current_data) if current_data is not None else {}
+    prefix = f"edit_{row_number}_" if editing else "reg_"
+    if not editing and st.session_state.pop("registration_create_reset", False):
+        for key in list(st.session_state):
+            if key.startswith("reg_"):
+                del st.session_state[key]
+
+    def text(field):
+        return picking_text(current.get(field))
+
+    def select(label, field, suffix, options):
+        old = text(field) if editing else options[0]
+        choices = list(options)
+        if old and old not in choices:
+            choices.append(old)
+        return st.selectbox(label, choices, index=choices.index(old) if old in choices else None,
+                            key=prefix + suffix, placeholder="เลือกข้อมูล") or ""
+
+    render_registration_steps()
+    with st.form("edit_form" if editing else "trading_form"):
+        with st.container(key="registration_card_product"):
+            registration_card_heading(1, "ข้อมูลสินค้า", "ระบุชื่อสายพันธุ์ ประเภทสินค้า และเกรดที่ใช้ติดตามสต็อก")
+            left, right = st.columns(2, gap="large")
+            with left:
+                cultivar = st.text_input("Cultivar Name · ชื่อสายพันธุ์", value=text("Cultivar Name"),
+                                         placeholder="เช่น Blue Dream", key=prefix + "cultivar")
+            with right:
+                export = st.text_input("Export Name · ชื่อส่งออก", value=text("Export Name"),
+                                       placeholder="ชื่อผลิตภัณฑ์สำหรับส่งออก", key=prefix + "export")
+            left, right = st.columns(2, gap="large")
+            with left:
+                category = select("Category · ประเภทสต็อก", "Category", "category", ["FG (Finished Goods)", "WIP (Work in Progress)"])
+            with right:
+                grade = select("Grade · เกรด", "Grade", "grade", ["Big", "Small", "Mix", "F", "Grade A", "Premium"])
+            left, right = st.columns(2, gap="large")
+            with left:
+                product_type = select("Type · รูปแบบผลิตภัณฑ์", "Type", "type", [
+                    "Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product", "To be decided",
+                ])
+            with right:
+                status = select("Status · สถานะสินค้า", "Status", "status", [
+                    "Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return",
+                ])
+        with st.container(key="registration_card_supplier"):
+            registration_card_heading(2, "Supplier และเลข Lot", "เชื่อมโยงสินค้ากับผู้จัดหาและเลขล็อตสำหรับตรวจสอบย้อนกลับ")
+            left, right = st.columns(2, gap="large")
+            with left:
+                supplier = st.text_input("Supplier Name · ผู้จัดหา", value=text("Supplier Name"),
+                                         placeholder="ระบุชื่อผู้จัดหา", key=prefix + "supplier")
+            with right:
+                supplier_lot = st.text_input("Supplier Lot No. · ล็อตผู้จัดหา", value=text("Supplier Lot. No."),
+                                             placeholder="เลข Lot จาก Supplier", key=prefix + "supplier_lot")
+            thai_lot = st.text_input("THAI STICK Lot No. · เลขล็อตภายใน", value=text("THAI STICK Lot. No."),
+                                     placeholder="ระบุเลข Lot ที่ใช้ติดตามในระบบ", key=prefix + "thai_lot")
+        with st.container(key="registration_card_inventory"):
+            registration_card_heading(3, "ข้อมูลรับเข้าและจำนวน", "ระบุวันที่รับสินค้าและน้ำหนักเป็นกรัม พร้อมรายละเอียดจำนวนแพ็กถ้ามี")
+            left, right = st.columns(2, gap="large")
+            with left:
+                receive_date = st.date_input("Receive date · วันที่รับเข้า", key=prefix + "receive_date",
+                    value=registration_date(current.get("Receive date", current.get("Date receive", current.get("Date Receive", "")))))
+            with right:
+                quantity = st.number_input("Quantity · จำนวน (g)", min_value=0.0, step=0.1, format="%.2f",
+                                           value=max(0.0, picking_quantity(current.get("Quantity")) or 0.0), key=prefix + "quantity")
+            remark = st.text_input("Remark Qty · รายละเอียดจำนวน", value=text("Remark Qty"),
+                                    placeholder="เช่น 5 × 1,000 g หรือ 10 แพ็ก", key=prefix + "remark_qty")
+        with st.container(key="registration_card_shipping"):
+            registration_card_heading(4, "การตรวจสอบและแผนส่ง", "กำหนดเงื่อนไขการตรวจสอบและวันจัดส่ง หรือเลือก To be decided หากยังไม่ยืนยัน")
+            left, right = st.columns(2, gap="large")
+            with left:
+                inspection = select("Inspection Req. · ต้องตรวจสอบ", "Inspection Req.", "inspection", ["Yes", "No", "To be decided"])
+            with right:
+                ir = select("IR Req. · ข้อกำหนด IR", "IR Req.", "ir", ["Yes", "No", "To be decided"])
+            left, right = st.columns(2, gap="large")
+            with left:
+                shipment = st.date_input("Shipment date · วันที่จัดส่ง", value=registration_date(current.get("Shipment date")),
+                                          key=prefix + "shipment_date")
+            with right:
+                ship_tbd = st.checkbox("ยังไม่กำหนดวันจัดส่ง", key=prefix + "ship_tbd",
+                    value=editing and picking_text(current.get("Shipment date")).casefold() in DELIVERY_PENDING_VALUES)
+                st.caption("เมื่อเลือก ระบบจะบันทึก To be decided แทนวันที่ในช่องจัดส่ง")
+        st.markdown('<p class="registration-submit-note">ตรวจชื่อสายพันธุ์ เลข Lot และจำนวนให้ครบก่อนบันทึก</p>', unsafe_allow_html=True)
+        submitted = st.form_submit_button("บันทึกการแก้ไข" if editing else "บันทึกสินค้าเข้าระบบ", type="primary", width="stretch")
+
+    return submitted, {
+        "Cultivar Name": cultivar, "Supplier Name": supplier, "Supplier Lot. No.": supplier_lot,
+        "Export Name": export, "THAI STICK Lot. No.": thai_lot, "Category": category, "Grade": grade,
+        "Receive date": str(receive_date), "Quantity": float(quantity), "Remark Qty": remark,
+        "Inspection Req.": inspection, "IR Req.": ir, "Shipment date": "To be decided" if ship_tbd else str(shipment),
+        "Type": product_type, "Status": status, "Packing date": text("Packing date") if editing else "",
+    }
+
+
+def render_registration_selected(current):
+    cultivar = picking_text(current.get("Cultivar Name")) or "ไม่ระบุสายพันธุ์"
+    lot = picking_text(current.get("THAI STICK Lot. No.")) or picking_text(current.get("Supplier Lot. No.")) or "ไม่ระบุ Lot"
+    supplier = picking_text(current.get("Supplier Name")) or "ไม่ระบุ Supplier"
+    category = picking_text(current.get("Category")) or "ไม่ระบุประเภท"
+    grade = picking_text(current.get("Grade")) or "ไม่ระบุเกรด"
+    quantity = picking_quantity(current.get("Quantity")) or 0.0
+    st.markdown(
+        '<section class="registration-selected"><div><div class="registration-selected__label">ล็อตที่กำลังแก้ไข</div>'
+        f'<h2>{escape(cultivar)}</h2><p>Lot {escape(lot)} · {escape(supplier)}</p>'
+        f'<p>{escape(category)} · เกรด {escape(grade)}</p></div>'
+        f'<div class="registration-selected__quantity"><strong>{quantity:,.2f} g</strong><small>จำนวนคงเหลือปัจจุบัน</small></div></section>',
+        unsafe_allow_html=True,
+    )
+
+
 # ==========================================
 # 5. Sidebar เมนูด้านซ้าย
 # ==========================================
@@ -2029,224 +2241,109 @@ elif menu == "📈 Monthly Report":
 # หน้าที่ 4: Trading Goods Registration
 # ==========================================
 elif menu == "📝 Trading Goods Registration":
-    col_head1, col_head2 = st.columns([7, 3])
-    with col_head1:
-        st.title("📝 Trading Goods Registration")
-        st.markdown("กรอกข้อมูลผลิตภัณฑ์และประเภทสินค้า (WIP หรือ FG) ลงในระบบ")
-    with col_head2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        with st.expander("🔗 Direct Google Sheets (Multiple Batch)"):
-            pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd", placeholder="กรอกรหัสผ่าน")
-            if pwd == "tstd": st.markdown("[🟢 **คลิกเพื่อเปิด Google Sheets**](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit?gid=0#gid=0)")
-            elif pwd != "": st.error("รหัสผ่านไม่ถูกต้อง ❌")
-
-    with st.form("trading_form", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            cultivar_name = st.text_input("1. Cultivar Name")
-            supplier_name = st.text_input("2. Supplier Name")
-            supplier_lot = st.text_input("3. Supplier Lot. No.")
-            export_name = st.text_input("4. Export Name")
-            thai_stick_lot = st.text_input("5. THAI STICK Lot. No.")
-            category = st.selectbox("6. Category", ["FG (Finished Goods)", "WIP (Work in Progress)"])
-            grade = st.selectbox("7. Grade", ["Big", "Small", "Mix", "F", "Grade A", "Premium"])
-        with col2:
-            receive_date_str = str(st.date_input("8. Receive date", value=date.today(), key="reg_rec_dt"))
-            quantity = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1)
-            remark_qty = st.text_input("Remark Qty (เช่น 5x1000)", placeholder="ระบุรายละเอียดจำนวนถุง/แพ็ก")
-
-            insp_con = st.container()
-            is_tbd_insp = st.checkbox("To be decided", key="reg_tbd_insp")
-            inspection_req_val = insp_con.selectbox("10. Inspection Req.", ["Yes", "No"], disabled=is_tbd_insp, key="reg_insp")
-            inspection_req = "To be decided" if is_tbd_insp else inspection_req_val
-
-            ir_con = st.container()
-            is_tbd_ir = st.checkbox("To be decided", key="reg_tbd_ir")
-            ir_req_val = ir_con.selectbox("11. IR Req.", ["Yes", "No"], disabled=is_tbd_ir, key="reg_ir")
-            ir_req = "To be decided" if is_tbd_ir else ir_req_val
-
-            ship_con = st.container()
-            is_tbd_ship = st.checkbox("To be decided", key="reg_tbd_ship")
-            shipment_date_val = ship_con.date_input("12. Shipment date", value=date.today(), disabled=is_tbd_ship, key="reg_ship")
-            shipment_date = "To be decided" if is_tbd_ship else str(shipment_date_val)
-
-            type_con = st.container()
-            is_tbd_type = st.checkbox("To be decided", key="reg_tbd_type")
-            type_opts = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product"]
-            prod_type_val = type_con.selectbox("13. Type", type_opts, disabled=is_tbd_type, key="reg_type")
-            prod_type = "To be decided" if is_tbd_type else prod_type_val
-
-            status = st.selectbox(
-                "14. Status",
-                ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"],
-            )
-        
-        submitted = st.form_submit_button("💾 บันทึกข้อมูลลง Google Sheets")
+    render_registration_ui_styles()
+    with st.container(key="registration_create"):
+        header, shortcut = st.columns([4, 1.4], gap="large")
+        with header:
+            with st.container(key="registration_header"):
+                st.markdown('<p class="registration-eyebrow">NEW REGISTRATION</p>', unsafe_allow_html=True)
+                st.title("Trading Goods Registration")
+                st.caption("ลงทะเบียน WIP / FG พร้อมข้อมูลผู้จัดหา เลข Lot และเงื่อนไขการจัดส่ง")
+        with shortcut:
+            with st.expander("🔗 Google Sheets"):
+                pwd = st.text_input("รหัสผ่าน:", type="password", key="gsheet_shortcut_pwd", placeholder="กรอกรหัสผ่าน")
+                if pwd == "tstd":
+                    st.markdown("[เปิด Google Sheets](https://docs.google.com/spreadsheets/d/1RLtRn7gojLLLxrsm9mSFRLy7eGmCYRn5bgsoCmuju7Y/edit?gid=0#gid=0)")
+                elif pwd:
+                    st.error("รหัสผ่านไม่ถูกต้อง")
+        flash = st.session_state.get("registration_flash")
+        if flash and flash["mode"] == "create":
+            st.success(st.session_state.pop("registration_flash")["message"])
+        submitted, registration = render_registration_form()
         if submitted:
-            latest_headers = [
-                "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
-                "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
-                "Shipment date", "Type", "Status", "Packing date"
-            ]
-            row_dict = {
-                "Cultivar Name": cultivar_name, "Supplier Name": supplier_name, "Supplier Lot. No.": supplier_lot,
-                "Export Name": export_name, "THAI STICK Lot. No.": thai_stick_lot, "Category": category, "Grade": grade,
-                "Receive date": receive_date_str, "Quantity": float(quantity), "Remark Qty": remark_qty,
-                "Inspection Req.": inspection_req, "IR Req.": ir_req, "Shipment date": shipment_date,
-                "Type": prod_type, "Status": status, "Packing date": "",
-            }
-            row_to_insert = [row_dict.get(h, "") for h in latest_headers]
-            
-            sheet.append_row(values=row_to_insert, value_input_option='USER_ENTERED')
-            get_cached_data.clear()
-            
-            # ✨ เพิ่มส่วนนี้: ล้างค่า Checkbox 'To be decided' ที่ค้างใน Session State ทิ้ง
-            keys_to_clear = ["reg_tbd_insp", "reg_insp", "reg_tbd_ir", "reg_ir", "reg_tbd_ship", "reg_ship", "reg_tbd_type", "reg_type", "reg_rec_dt"]
-            for k in keys_to_clear:
-                if k in st.session_state:
-                    del st.session_state[k]
-                    
-            st.success("บันทึกข้อมูลสำเร็จเรียบร้อยแล้ว! 🎉")
-            time.sleep(1)
-            st.rerun()
+            try:
+                sheet.append_row(values=list(registration.values()), value_input_option="USER_ENTERED")
+            except Exception as error:
+                st.error(f"บันทึกยังไม่สำเร็จ กรุณาลองใหม่: {error}")
+            else:
+                get_cached_data.clear()
+                st.session_state["registration_create_reset"] = True
+                st.session_state["registration_flash"] = {
+                    "mode": "create", "message": "บันทึกสินค้าเข้าระบบเรียบร้อยแล้ว พร้อมลงทะเบียนรายการถัดไป",
+                }
+                st.rerun()
 
 # ==========================================
 # หน้าที่ 5: Edit Registration
 # ==========================================
 elif menu == "✏️ Edit Registration":
-    st.title("✏️ Edit Registration Data")
-    st.markdown("ค้นหาและแก้ไขข้อมูลล็อตสินค้าที่เคยบันทึกไว้")
-
-    data = get_cached_data("main", sheet)
-    if data:
-        df_all = pd.DataFrame(data)
-        df_all.columns = [str(c).strip() for c in df_all.columns]
-        lot_column = "THAI STICK Lot. No." if "THAI STICK Lot. No." in df_all.columns else df_all.columns[4]
-
-        df_all["Clean_Qty"] = df_all["Quantity"].apply(clean_quantity) if "Quantity" in df_all.columns else 0.0
-        df_all["Original_Row_Index"] = df_all.index + 2
-
-        if "Status" in df_all.columns:
-            editable_df = df_all[(df_all["Clean_Qty"] > 0) & (~df_all["Status"].astype(str).str.strip().str.lower().eq("delivered"))].copy()
+    render_registration_ui_styles()
+    with st.container(key="registration_edit"):
+        with st.container(key="registration_header"):
+            st.markdown('<p class="registration-eyebrow">EDIT REGISTRATION</p>', unsafe_allow_html=True)
+            st.title("Edit Registration")
+            st.caption("ค้นหาล็อตสินค้า ตรวจสอบข้อมูลปัจจุบัน และแก้ไขรายละเอียดในแบบฟอร์มด้านล่าง")
+        flash = st.session_state.get("registration_flash")
+        if flash and flash["mode"] == "edit":
+            st.success(st.session_state.pop("registration_flash")["message"])
+        data = get_cached_data("main", sheet, include_row_index=True)
+        if data:
+            df_all = pd.DataFrame(data)
+            df_all.columns = [str(column).strip() for column in df_all.columns]
+            df_all["Clean_Qty"] = df_all["Quantity"].apply(lambda value: picking_quantity(value) or 0.0) if "Quantity" in df_all else 0.0
+            active = df_all["Clean_Qty"].gt(0)
+            if "Status" in df_all:
+                active &= ~df_all["Status"].astype(str).str.strip().str.casefold().eq("delivered")
+            editable_df = df_all[active].copy()
+            if editable_df.empty:
+                st.info("ไม่มีล็อตสินค้าที่สามารถแก้ไขได้ในขณะนี้")
+            else:
+                with st.container(key="registration_filter"):
+                    st.markdown("**ค้นหาล็อตที่ต้องการแก้ไข**")
+                    search_col, category_col = st.columns([3, 1], gap="large")
+                    with search_col:
+                        query = st.text_input("ค้นหาชื่อสายพันธุ์, Supplier หรือ Lot", placeholder="พิมพ์ชื่อหรือเลข Lot ที่ต้องการค้นหา", key="registration_edit_search")
+                    with category_col:
+                        selected_category = st.selectbox("ประเภทสต็อก", ["ทุกประเภท", "WIP", "FG"], key="registration_edit_category")
+                    filtered = editable_df
+                    if query.strip():
+                        fields = [field for field in ["Cultivar Name", "Export Name", "Supplier Name", "Supplier Lot. No.", "THAI STICK Lot. No."] if field in filtered]
+                        search_text = filtered[fields].fillna("").astype(str).agg(" ".join, axis=1)
+                        filtered = filtered[search_text.str.casefold().str.contains(query.strip().casefold(), regex=False)]
+                    if selected_category != "ทุกประเภท":
+                        categories = filtered["Category"].astype(str) if "Category" in filtered else pd.Series("", index=filtered.index)
+                        filtered = filtered[categories.str.contains(selected_category, case=False, na=False, regex=False)]
+                    st.caption(f"พบ {len(filtered):,} รายการ จากล็อตที่แก้ไขได้ทั้งหมด {len(editable_df):,} รายการ · แสดงเฉพาะสต็อกคงเหลือที่ยังไม่ Delivered")
+                    records_by_row = {int(row["Original_Row_Index"]): row.to_dict() for _, row in filtered.iterrows()}
+                    labels = {}
+                    for index, (row_number, record) in enumerate(records_by_row.items(), start=1):
+                        cultivar = picking_text(record.get("Cultivar Name")) or "ไม่ระบุสายพันธุ์"
+                        lot = picking_text(record.get("THAI STICK Lot. No.")) or picking_text(record.get("Supplier Lot. No.")) or "ไม่ระบุ Lot"
+                        grade = picking_text(record.get("Grade")) or "—"
+                        labels[row_number] = f"{index:02d} · {cultivar} | Lot {lot} | {grade} | {record['Clean_Qty']:,.2f} g"
+                    if records_by_row:
+                        selected_row = st.selectbox("เลือกล็อตสินค้า", list(records_by_row), format_func=labels.get, key="registration_edit_lot")
+                if not records_by_row:
+                    st.info("ไม่พบล็อตที่ตรงกับการค้นหา ลองเปลี่ยนคำค้นหรือเลือกทุกประเภท")
+                else:
+                    current = records_by_row[selected_row]
+                    render_registration_selected(current)
+                    submitted, registration = render_registration_form(editing=True, current_data=current, row_number=selected_row)
+                    if submitted:
+                        try:
+                            sheet.update(range_name=f"A{selected_row}:P{selected_row}", values=[[str(value) for value in registration.values()]])
+                        except Exception as error:
+                            st.error(f"ยังบันทึกการแก้ไขไม่สำเร็จ กรุณาลองใหม่: {error}")
+                        else:
+                            get_cached_data.clear()
+                            lot = registration["THAI STICK Lot. No."] or registration["Supplier Lot. No."] or registration["Cultivar Name"]
+                            st.session_state["registration_flash"] = {
+                                "mode": "edit", "message": f"บันทึกการแก้ไข Lot {lot} เรียบร้อยแล้ว",
+                            }
+                            st.rerun()
         else:
-            editable_df = df_all[df_all["Clean_Qty"] > 0].copy()
+            st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
 
-        if editable_df.empty:
-            st.info("ℹ️ ไม่มีล็อตสินค้าที่สามารถแก้ไขได้ในขณะนี้")
-        else:
-            edit_options = []
-            edit_map = {}
-
-            for _, r in editable_df.iterrows():
-                lot_no = str(r.get(lot_column, "")).strip()
-                if not lot_no: lot_no = str(r.get("Supplier Lot. No.", "")).strip()
-                
-                cultivar = str(r.get("Cultivar Name", ""))
-                grade = str(r.get("Grade", ""))
-                qty = float(r["Clean_Qty"])
-                row_idx = r["Original_Row_Index"]
-                df_idx = r.name
-                
-                disp = f"Lot: {lot_no} | Size: {grade} | {cultivar} | Qty: {qty:,.2f}"
-                edit_options.append(disp)
-                edit_map[disp] = {"row_idx": row_idx, "lot_no": lot_no, "df_index": df_idx}
-
-            selected_disp = st.selectbox("🔍 เลือกข้อมูลที่ต้องการแก้ไข (Lot No. & Size)", edit_options)
-
-            if selected_disp:
-                selected_info = edit_map[selected_disp]
-                matched_row_idx = selected_info["row_idx"]
-                selected_lot = selected_info["lot_no"]
-                current_data = df_all.iloc[selected_info["df_index"]]
-
-                with st.form("edit_form"):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        e_cultivar = st.text_input("1. Cultivar Name", value=str(current_data.get("Cultivar Name", "")))
-                        e_supplier = st.text_input("2. Supplier Name", value=str(current_data.get("Supplier Name", "")))
-                        e_supp_lot = st.text_input("3. Supplier Lot. No.", value=str(current_data.get("Supplier Lot. No.", "")))
-                        e_export = st.text_input("4. Export Name", value=str(current_data.get("Export Name", "")))
-                        e_thai_lot = st.text_input("5. THAI STICK Lot. No.", value=str(current_data.get("THAI STICK Lot. No.", "")))
-
-                        cat_opt = ["FG (Finished Goods)", "WIP (Work in Progress)"]
-                        old_cat = str(current_data.get("Category", "FG (Finished Goods)"))
-                        e_category = st.selectbox("6. Category", cat_opt, index=cat_opt.index(old_cat) if old_cat in cat_opt else 0)
-
-                        grades_opt = ["Big", "Small", "Mix", "F", "Grade A", "Premium"]
-                        old_grade = str(current_data.get("Grade", "Big"))
-                        e_grade = st.selectbox("7. Grade", grades_opt, index=grades_opt.index(old_grade) if old_grade in grades_opt else 0)
-
-                    with col2:
-                        old_rec_date = str(current_data.get("Receive date", current_data.get("Date receive", current_data.get("Date Receive", ""))))
-                        try: default_rec_dt = pd.to_datetime(old_rec_date, dayfirst=True).date() if old_rec_date and str(old_rec_date).strip() else date.today()
-                        except: default_rec_dt = date.today()
-                        e_receive_date_str = str(st.date_input("8. Receive date", value=default_rec_dt, key=f"edit_receive_date_{matched_row_idx}"))
-
-                        old_qty = float(current_data.get("Clean_Qty", 0.0))
-                        e_qty = st.number_input("9. Quantity (g)", min_value=0.0, step=0.1, value=old_qty)
-                        e_remark_qty = st.text_input("Remark Qty", value=str(current_data.get("Remark Qty", "")), key=f"edit_remark_qty_{matched_row_idx}")
-
-                        old_insp = str(current_data.get("Inspection Req.", "No"))
-                        insp_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
-                        e_is_tbd_insp = st.checkbox("To be decided", value=(old_insp == "To be decided"), key=f"edit_tbd_insp_{matched_row_idx}")
-                        insp_opts = ["Yes", "No"]
-                        e_insp_val = insp_con.selectbox("10. Inspection Req.", insp_opts, index=insp_opts.index(old_insp) if old_insp in insp_opts else 0, disabled=e_is_tbd_insp, key=f"edit_insp_{matched_row_idx}")
-                        e_insp = "To be decided" if e_is_tbd_insp else e_insp_val
-
-                        old_ir = str(current_data.get("IR Req.", "No"))
-                        ir_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
-                        e_is_tbd_ir = st.checkbox("To be decided", value=(old_ir == "To be decided"), key=f"edit_tbd_ir_{matched_row_idx}")
-                        ir_opts = ["Yes", "No"]
-                        e_ir_val = ir_con.selectbox("11. IR Req.", ir_opts, index=ir_opts.index(old_ir) if old_ir in ir_opts else 0, disabled=e_is_tbd_ir, key=f"edit_ir_{matched_row_idx}")
-                        e_ir = "To be decided" if e_is_tbd_ir else e_ir_val
-
-                        old_date = str(current_data.get("Shipment date", ""))
-                        ship_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
-                        e_is_tbd_ship = st.checkbox("To be decided", value=(old_date == "To be decided"), key=f"edit_tbd_ship_{matched_row_idx}")
-                        try: default_dt = pd.to_datetime(old_date, dayfirst=True).date() if old_date != "To be decided" and old_date.strip() else date.today()
-                        except: default_dt = date.today()
-                        e_ship_val = ship_con.date_input("12. Shipment date", value=default_dt, disabled=e_is_tbd_ship, key=f"edit_ship_{matched_row_idx}")
-                        e_shipment_date = "To be decided" if e_is_tbd_ship else str(e_ship_val)
-
-                        old_type = str(current_data.get("Type", ""))
-                        type_con = st.container()
-                        # ✨ เติม _{matched_row_idx} ท้ายคีย์
-                        e_is_tbd_type = st.checkbox("To be decided", value=(old_type == "To be decided"), key=f"edit_tbd_type_{matched_row_idx}")
-                        type_opts = ["Inspection & Packing Service", "Trading Goods (TS)", "Consignment", "In House Product"]
-                        e_type_val = type_con.selectbox("13. Type", type_opts, index=type_opts.index(old_type) if old_type in type_opts else 0, disabled=e_is_tbd_type, key=f"edit_type_{matched_row_idx}")
-                        e_type = "To be decided" if e_is_tbd_type else e_type_val
-
-                        status_opt = ["Trading Goods Received to Stock", "Inspection Completed", "Pending Packing", "Packing done", "Delivered", "Waiting for Return"]
-                        old_status = str(current_data.get("Status", ""))
-                        e_status = st.selectbox("14. Status", status_opt, index=status_opt.index(old_status) if old_status in status_opt else 0)
-
-                    st.markdown("")
-                    if st.form_submit_button("🔄 อัปเดตข้อมูล (Update Google Sheets)"):
-                        latest_headers = [
-                            "Cultivar Name", "Supplier Name", "Supplier Lot. No.", "Export Name", "THAI STICK Lot. No.", 
-                            "Category", "Grade", "Receive date", "Quantity", "Remark Qty", "Inspection Req.", "IR Req.", 
-                            "Shipment date", "Type", "Status", "Packing date"
-                        ]
-                        updated_dict = {
-                            "Cultivar Name": e_cultivar, "Supplier Name": e_supplier, "Supplier Lot. No.": e_supp_lot,
-                            "Export Name": e_export, "THAI STICK Lot. No.": e_thai_lot, "Category": e_category, "Grade": e_grade,
-                            "Receive date": e_receive_date_str, "Quantity": str(e_qty), "Remark Qty": e_remark_qty,
-                            "Inspection Req.": e_insp, "IR Req.": e_ir, "Shipment date": e_shipment_date,
-                            "Type": e_type, "Status": e_status, "Packing date": "",
-                        }
-                        updated_row_data = [str(updated_dict.get(h, "")) for h in latest_headers]
-                        col_end_letter = chr(64 + len(latest_headers)).upper()
-                        
-                        sheet.update(range_name=f"A{matched_row_idx}:{col_end_letter}{matched_row_idx}", values=[updated_row_data])
-                        get_cached_data.clear()
-                        st.success(f"อัปเดตข้อมูลของ Lot: {selected_lot} (Size: {e_grade}) เรียบร้อยแล้ว! 🎉")
-                        time.sleep(1)
-                        st.rerun()
-    else:
-        st.info("ยังไม่มีข้อมูลในระบบให้แก้ไข")
 
 # ==========================================
 # หน้าที่ 6: Packing Module
