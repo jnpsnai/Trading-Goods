@@ -79,6 +79,14 @@ def key(value: Any) -> str:
     return " ".join(text(value).split()).casefold()
 
 
+def permit_number(record: Mapping[str, Any]) -> str:
+    """Read old Permit No / Permit No. headers without losing leading zeroes."""
+    for header in ["Permit No.", *record.keys()]:
+        if re.sub(r"[^a-z0-9]", "", str(header).casefold()) == "permitno" and text(record.get(header)):
+            return text(record[header])
+    return ""
+
+
 def now_bangkok() -> datetime:
     return datetime.now(BANGKOK)
 
@@ -439,7 +447,7 @@ from trading_core import (
     MAIN_HEADERS, PACK_HEADERS, PACK_LOG_HEADERS, SHIP_HEADERS,
     MAIN_META_HEADERS, PACK_META_HEADERS, MOVEMENT_HEADERS, TRANSACTION_HEADERS,
     ValidationError, decimal_quantity, inventory_from_records, key, now_bangkok,
-    parse_date, parse_sheet, read_records, text, today_bangkok, number,
+    parse_date, parse_sheet, read_records, text, today_bangkok, number, permit_number,
 )
 
 
@@ -450,7 +458,7 @@ LEASE_MINUTES = 15
 MAIN_REQUIRED = ("Cultivar Name", "Category", "Grade", "Quantity")
 PACK_REQUIRED = ("Quantity", "Grade")
 SHIP_META_HEADERS = ["Inventory ID", "Transaction ID", "Request ID", "Line ID",
-                     "True Consignee", "Project Owner", "Type", "Supplier Name"]
+                     "True Consignee", "Project Owner", "Type", "Supplier Name", "Permit No."]
 PACK_LOG_META_HEADERS = ["Transaction ID", "Batch ID", "Source Details"]
 PICKING_LIFECYCLE_HEADERS = ["Request Status", "Shipped Volume"]
 _ZERO = Decimal("0")
@@ -1152,7 +1160,8 @@ def ship_inventory(spreadsheet, transaction_id, lines, metadata):
                              "Request ID": request_id, "Line ID": line_id, "True Consignee": true_consignee,
                              "Project Owner": text(request_row.get("Project Owner")) if request_row else "",
                              "Type": text(request_row.get("Type")) if request_row else text(item["record"].get("Type")),
-                             "Supplier Name": item.get("supplier", "")})
+                             "Supplier Name": item.get("supplier", ""),
+                             "Permit No.": permit_number(request_row) if request_row else text(metadata.get("permit_no"))})
             movement_rows.append(_movement(context, item, "SHIP", -quantity, running_balances[item["inventory_id"]], business_date,
                                           f"ship:{index}", text(metadata.get("note")), request_id, line_id))
         request_statuses = {}
@@ -1190,7 +1199,7 @@ import json
 from uuid import uuid4
 
 from trading_core import (
-    ValidationError, decimal_quantity, key, number, parse_date, text,
+    ValidationError, decimal_quantity, key, number, parse_date, text, permit_number,
 )
 from trading_transactions import read_history, run_fenced_mutation
 
@@ -1202,7 +1211,7 @@ PICKING_BASE_HEADERS = [
     "Expected Shipping Date", "Required Category", "Note",
 ]
 PICKING_HEADERS = PICKING_BASE_HEADERS + [
-    "Project Owner", "Type", "Supplier Name", "Request Status", "Shipped Volume",
+    "Project Owner", "Type", "Supplier Name", "Request Status", "Shipped Volume", "Permit No.",
 ]
 OPTIONAL_HEADERS = [name for name in PICKING_HEADERS if name not in PICKING_BASE_HEADERS]
 
@@ -1217,6 +1226,7 @@ def request_progress(spreadsheet, rows):
     result, totals, seen = [], {}, set()
     for source in rows:
         row = dict(source)
+        row["Permit No."] = permit_number(row)
         identity = (text(row.get("Request ID")), text(row.get("Line ID")))
         if not all(identity) or identity in seen:
             raise ValidationError("Request ID / Line ID ว่างหรือซ้ำ กรุณาตรวจข้อมูล Picking_Requests")
@@ -1327,6 +1337,7 @@ def update_picking_request(spreadsheet, request_id, expected_rows, lines):
             next_index += 1
         original = originals.get(line_id, expected_rows[0])
         record = _record(request_id, text(original.get("Created At")), line_id, line)
+        record["Permit No."] = text(line["Permit No."]) if "Permit No." in line else permit_number(original) if line_id in originals else ""
         record["Shipped Volume"] = number(decimal_quantity(original.get("Shipped Volume") or 0)) if line_id in originals else 0
         payload.append(record)
 
@@ -1356,7 +1367,11 @@ def update_picking_request(spreadsheet, request_id, expected_rows, lines):
             row["Request Status"] = lifecycle
         for row in current:
             replacement = by_id.get(text(row.get("Line ID")))
-            ctx.update(plan, row["Original_Row_Index"], replacement or {name: None for name in PICKING_HEADERS})
+            changes = dict(replacement) if replacement else {name: None for name in PICKING_HEADERS}
+            for header in plan.headers:
+                if "".join(character for character in header.casefold() if character.isalnum()) == "permitno":
+                    changes[header] = changes.get("Permit No.")
+            ctx.update(plan, row["Original_Row_Index"], changes)
         new_rows = [row for row in payload if row["Line ID"] not in originals]
         if new_rows:
             ctx.append(plan, new_rows)
@@ -1391,18 +1406,26 @@ def delete_picking_request(spreadsheet, request_id, expected_rows):
 
 
 def update_delivery_dates(spreadsheet, targets, new_value):
-    new_value = shipping_date(new_value)
-    serializable = [{key: value for key, value in target.items() if key != "worksheet"}
+    return update_delivery_details(spreadsheet, targets, new_date=new_value)
+
+
+def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=None):
+    if not targets or (new_date is None and permit_no is None):
+        raise ValidationError("กรุณาเลือกรายการและข้อมูลที่ต้องการแก้ไข")
+    new_date = shipping_date(new_date) if new_date is not None else None
+    permit_no = text(permit_no) if permit_no is not None else None
+    serializable = [{name: value for name, value in target.items() if name != "worksheet"}
                     | {"sheet": target["worksheet"].title} for target in targets]
-    operation = {"targets": serializable, "date": new_value}
+    operation = {"targets": serializable, "date": new_date, "permit_no": permit_no}
 
     def build(ctx):
         for target in targets:
             title = target["worksheet"].title
             is_request = title == PICKING_SHEET_NAME
             plan = ctx.worksheet_plan(title, PICKING_BASE_HEADERS if is_request else [],
-                                      OPTIONAL_HEADERS if is_request else ["Delivery ID"])
-            if target["date_header"] not in plan.headers:
+                                      OPTIONAL_HEADERS if is_request else ["Delivery ID", "Permit No."])
+            date_header = target.get("date_header")
+            if new_date is not None and date_header not in plan.headers:
                 raise ValidationError("ไม่พบคอลัมน์วันที่จัดส่ง")
             if target.get("line_id"):
                 matches = [row for row in plan.records if text(row.get("Line ID")) == text(target["line_id"])
@@ -1414,20 +1437,28 @@ def update_delivery_dates(spreadsheet, targets, new_value):
             if len(matches) != 1:
                 raise ValidationError("รายการถูกย้ายหรือลบแล้ว กรุณาโหลด Delivery Issue ใหม่")
             row = matches[0]
-            if "expected_date" not in target or text(row.get(target["date_header"])) != text(target["expected_date"]):
+            if "expected_date" not in target or text(row.get(date_header)) != text(target["expected_date"]):
                 raise ValidationError("วันจัดส่งเปลี่ยนไปแล้ว กรุณาโหลด Delivery Issue ใหม่")
+            if "expected_permit" in target and permit_number(row) != text(target["expected_permit"]):
+                raise ValidationError("Permit No. เปลี่ยนไปแล้ว กรุณาโหลดข้อมูลใหม่")
             for field, wanted in target.get("identity", {}).items():
                 if text(row.get(field)) != text(wanted):
                     raise ValidationError("ข้อมูลรายการเปลี่ยนไปแล้ว กรุณาเลือกจากข้อมูลล่าสุด")
             if is_request and key(row.get("Request Status")) in {"cancelled", "completed"}:
                 raise ValidationError("คำขอนี้ถูกยกเลิกหรือส่งครบแล้ว")
-            changes = {target["date_header"]: new_value}
+            changes = {}
+            if new_date is not None:
+                changes[date_header] = new_date
+            if permit_no is not None:
+                for header in plan.headers:
+                    if "".join(character for character in header.casefold() if character.isalnum()) == "permitno":
+                        changes[header] = permit_no
             if not is_request:
                 changes["Delivery ID"] = text(row.get("Delivery ID")) or "DEL-" + uuid4().hex.upper()
             ctx.update(plan, row["Original_Row_Index"], changes)
-        return {"line_count": len(targets), "date": new_value}
+        return {"line_count": len(targets), "date": new_date, "permit_no": permit_no}
 
-    return run_fenced_mutation(spreadsheet, operation_id("DELIVERY-DATE", operation), "DELIVERY_RESCHEDULE", operation, build)
+    return run_fenced_mutation(spreadsheet, operation_id("DELIVERY-DETAILS", operation), "DELIVERY_UPDATE", operation, build)
 '''
 
 # Embedded application module: trading_reports.py
@@ -1982,6 +2013,7 @@ from collections import defaultdict
 from copy import deepcopy
 from datetime import date
 from html import escape
+import re
 from uuid import uuid4
 
 import pandas as pd
@@ -2237,31 +2269,54 @@ def render_numeric_dataframe(data, *, column_config=None, **kwargs):
     return st.dataframe(data, column_config=config, **kwargs)
 
 
+def fg_display_lot(value):
+    """Strip only the terminal packing sequence and grade; stored lot is intact."""
+    return re.sub(r"-FG\\d+-[^\\r\\n]+$", "", text(value), flags=re.IGNORECASE)
+
+
 def delivery_internal_lots(frame, main_records, packing_records):
-    """Resolve display lots from internal lot fields, never echo supplier lots."""
-    normalize = lambda value: "".join(character for character in str(value).casefold() if character.isalnum())
-    lot_columns = [column for column in frame if normalize(column) in {"lot", "lotno", "supplierlotno", "thaisticklotno"}]
+    """Prefer generated FG lots over any reference to their source WIP lots."""
+    normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value).casefold())
+    lot_columns = [column for column in frame if normalize(column) in {
+        "lot", "lotno", "supplierlotno", "thaisticklotno", "generatedfglotno"}]
     internal_columns = [column for column in lot_columns if normalize(column) == "thaisticklotno"]
-    reference_columns = [column for column in lot_columns if column not in internal_columns]
-    stock = [(row, text(row.get("THAI STICK Lot. No.")), text(row.get("Supplier Lot. No."))) for row in main_records]
-    stock += [(row, text(row.get("Generated FG Lot No.")), text(row.get("Source WIP Lot"))) for row in packing_records]
+    generated_columns = [column for column in lot_columns if normalize(column) == "generatedfglotno"]
+
+    def same_product(row, record):
+        return not any(text(row.get(field)) and key(row[field]) != key(record.get(field))
+                       for field in ("Cultivar Name", "Grade", "Supplier Name"))
+
+    def parts(value):
+        return {key(value), *(key(part) for part in re.split(r"[,;|+]|\\s+/\\s+", text(value)) if text(part))}
 
     def resolve(row):
-        direct = next((text(row.get(column)) for column in internal_columns if text(row.get(column))), "")
-        if direct:
-            return direct
-        reference = next((text(row.get(column)) for column in reference_columns if text(row.get(column))), "")
-        if not reference:
+        generated = next((text(row.get(column)) for column in generated_columns if text(row.get(column))), "")
+        if generated:
+            return fg_display_lot(generated)
+        references = set().union(*(parts(row.get(column)) for column in lot_columns if text(row.get(column))))
+        if not references:
             return "—"
         matches = []
-        for record, internal, supplier_lot in stock:
-            if not internal or key(reference) not in {key(internal), key(supplier_lot)}:
-                continue
-            if any(text(row.get(field)) and key(row[field]) != key(record.get(field)) for field in ("Cultivar Name", "Grade", "Supplier Name")):
-                continue
-            if internal not in matches:
-                matches.append(internal)
-        return " / ".join(matches) or "—"
+        for record in packing_records:
+            generated = next((text(value) for header, value in record.items() if normalize(header) == "generatedfglotno"), "")
+            candidates = parts(record.get("Source WIP Lot")) | {key(generated), key(fg_display_lot(generated))}
+            if generated and references & candidates and same_product(row, record):
+                display = fg_display_lot(generated)
+                if display not in matches:
+                    matches.append(display)
+        if matches:
+            return " / ".join(matches)
+        for record in main_records:
+            internal = text(record.get("THAI STICK Lot. No."))
+            candidates = {key(internal), key(record.get("Supplier Lot. No."))}
+            if internal and references & candidates and same_product(row, record):
+                generated = next((text(value) for header, value in record.items() if normalize(header) == "generatedfglotno"), "")
+                display = fg_display_lot(generated or internal) if "fg" in key(record.get("Category")) else internal
+                if display not in matches:
+                    matches.append(display)
+        if matches:
+            return " / ".join(matches)
+        return next((fg_display_lot(row.get(column)) for column in internal_columns if text(row.get(column))), "—")
 
     result = frame.drop(columns=lot_columns).copy()
     result["THAI STICK Lot No."] = frame.apply(resolve, axis=1) if not frame.empty else pd.Series(dtype=str)
@@ -2492,6 +2547,7 @@ def render_shipping_page(sh):
                 client = _input(draft, "client", "Client · ลูกค้า")
             with right:
                 true_consignee = _input(draft, "true_consignee", "True Consignee · ผู้รับจริงสำหรับรายการทั่วไป")
+                permit_no = _input(draft, "permit_no", "Permit No. · สำหรับรายการทั่วไป")
                 reason = _select(draft, "reason", "เหตุผลในการส่ง", ["SAMPLE", "EXPORT", "RETURN", "REJECT", "DOMESTIC SALE"])
             shipment_date = _date(draft, "shipment_date", "วันที่จัดส่ง")
         lines = []
@@ -2582,7 +2638,7 @@ def render_shipping_page(sh):
             if st.button("ยืนยันการส่งสินค้า", key="shipping_confirm", type="primary",
                          disabled=invalid or not lines or not client.strip() or missing_manual_consignee or not _can_write(), width="stretch"):
                 draft["attempt"] = {"kind": "SHIP", "payload": deepcopy({"lines": lines, "metadata": {
-                    "consignee": consignee, "true_consignee": true_consignee, "client": client,
+                    "consignee": consignee, "true_consignee": true_consignee, "client": client, "permit_no": permit_no,
                     "reason": reason, "shipment_date": shipment_date, "note": note,
                 }})}
                 try:
@@ -2690,11 +2746,11 @@ def render_monthly_page(sh):
                 date_field = "Parsed_Date" if "Parsed_Date" in shipments else "Shipment Date"
                 if date_field in shipments:
                     shipments = shipments.sort_values(date_field, ascending=False, kind="stable")
-                _render_table(shipments, columns=["Shipment Date", "Lot No.", "Cultivar / Product", "Grade", "Shipped Qty", "Consignee (ปลายทาง)", "Client (ลูกค้า)", "Shipping Reason", "Project Owner", "Type"])
+                _render_table(shipments, columns=["Shipment Date", "Lot No.", "Cultivar / Product", "Grade", "Shipped Qty", "Consignee (ปลายทาง)", "Client (ลูกค้า)", "Shipping Reason", "Project Owner", "Type", "Permit No."])
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '5d22b57d60daf865043d5c9fd2141d57a41262418bd4fa8094089080e167e816'
+_embedded_bundle = 'c76583f80fc5543a0ae5ca7630a806e92842b3d3b6f8b1fbab960b54c1a424a3'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -2721,7 +2777,7 @@ import logging
 import trading_core as core
 import trading_transactions as transactions
 import trading_requests as requests_service
-from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots
+from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots, fg_display_lot
 
 # ==========================================
 # 1. ตั้งค่าหน้าเว็บ Streamlit (Wide Mode & CSS)
@@ -3169,7 +3225,7 @@ def prepare_picking_changes(records, catalog, existing_rows):
     lines = []
     for index, record in enumerate(records, start=1):
         if not any(picking_text(record.get(header)) for header in
-                   ["Line ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Expected Shipping Date", "Note"]):
+                   ["Line ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Expected Shipping Date", "Note", "Permit No."]):
             continue
         try:
             line = prepare_picking_lines([record], edit_catalog)[0]
@@ -3179,6 +3235,7 @@ def prepare_picking_changes(records, catalog, existing_rows):
         line["Line ID"] = picking_text(record.get("Line ID"))
         # Keep saved reference metadata when only quantity/recipients/date change.
         original = next((row for row in existing_rows if picking_text(row.get("Line ID")) == line["Line ID"]), None)
+        line["Permit No."] = picking_text(record["Permit No."]) if "Permit No." in record else core.permit_number(original or {})
         if original and picking_key(original.get("Cultivar Name")) == picking_key(line["Cultivar Name"]):
             for header in ["Cultivar Name", "Export Name", "Source Categories", "Supplier Name"]:
                 line[header] = picking_text(original.get(header))
@@ -3233,6 +3290,7 @@ def render_picking_manager(spreadsheet, catalog):
                 key=editor_key,
                 column_config={
                     "Line ID": None,
+                    "Permit No.": st.column_config.TextColumn("Permit No.", width="medium"),
                     "Cultivar Name": st.column_config.SelectboxColumn("สายพันธุ์", options=options, required=True, width="medium"),
                     "Grade": st.column_config.TextColumn("เกรด FG", required=True, width="small"),
                     "Volume": st.column_config.NumberColumn("จำนวนส่ง (Volume)", min_value=0.0, step=0.01, format="%,.0f", required=True),
@@ -3887,6 +3945,10 @@ try:
 
         if not df_del.empty:
             df_del.columns = [str(c).strip() for c in df_del.columns]
+            permit_columns = [column for column in df_del if re.sub(r"[^a-z0-9]", "", column.casefold()) == "permitno"]
+            df_del["Permit No."] = df_del.apply(core.permit_number, axis=1)
+            df_del = df_del.drop(columns=[column for column in permit_columns if column != "Permit No."])
+
 
             vol_col = next((c for c in df_del.columns if "volume" in str(c).lower()), None)
             fg_col = next((c for c in df_del.columns if "available fg" in str(c).lower()), None)
@@ -4012,11 +4074,12 @@ try:
                             row_source = picking_text(r.get("_Delivery_Source")) or "legacy"
                             if row_source == "picking":
                                 disp_txt += f" | Request: {r['Request ID']}"
+                            disp_txt += f" | Permit: {core.permit_number(r) or 'ยังไม่ระบุ'}"
                             reschedule_opts.append(disp_txt)
                             reschedule_map[disp_txt] = {"row_idx": row_idx, "curr_date": curr_dt, "source": row_source,
                                                         "line_id": picking_text(r.get("Line ID")) if row_source == "picking" else "",
                                                         "request_id": picking_text(r.get("Request ID")) if row_source == "picking" else "",
-                                                        "delivery_id": picking_text(r.get("Delivery ID")),
+                                                        "delivery_id": picking_text(r.get("Delivery ID")), "permit_no": core.permit_number(r),
                                                         "identity": {field: picking_text(r.get(field)) for field in [
                                                             cultivar_column, grade_column,
                                                             find_delivery_column(df_del.columns, "Consignee"),
@@ -4079,6 +4142,7 @@ try:
                                             "date_header": "Expected Shipping Date" if is_picking else date_col,
                                             "line_id": item["line_id"], "request_id": item["request_id"],
                                             "expected_date": item["curr_date"], "delivery_id": item["delivery_id"], "identity": item["identity"],
+                                            "expected_permit": item["permit_no"],
                                         })
                                         success_rows.append(f"{target_sheet.title} แถว {target_row}")
                                     update_delivery_dates(sh, targets, new_value)
@@ -4092,6 +4156,48 @@ try:
                                         f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับ {', '.join(success_rows)} เรียบร้อยแล้ว"
                                     )
                                     st.rerun()
+
+            with st.expander("🪪 เพิ่ม / แก้ไข Permit No. ของรายการจัดส่ง"):
+                st.caption("เลือกรายการเดิมได้หลายรายการแล้วกำหนด Permit No. เดียวกัน โดยคงวันส่งและยอดเดิมไว้")
+                with st.form("delivery_permit_form"):
+                    permit_items = st.multiselect("เลือกรายการสำหรับ Permit No.", list(stable_map),
+                                                  format_func=reschedule_labels.get, key="delivery_permit_items")
+                    new_permit = st.text_input("Permit No.", key="delivery_permit_value")
+                    clear_permit = st.checkbox("ล้าง Permit No. ของรายการที่เลือก", key="delivery_permit_clear")
+                    if st.form_submit_button("บันทึก Permit No.", disabled=not can_write()):
+                        if not permit_items or (not clear_permit and not new_permit.strip()):
+                            st.error("กรุณาเลือกรายการและระบุ Permit No. หรือเลือกช่องล้างข้อมูล")
+                        else:
+                            try:
+                                targets = []
+                                for selected in permit_items:
+                                    item = stable_map[selected]
+                                    is_picking = item["source"] == "picking"
+                                    target_sheet = picking_delivery_sheet if is_picking else del_sheet
+                                    if target_sheet is None:
+                                        raise ValueError("ไม่พบชีตต้นทาง กรุณารีเฟรชข้อมูล")
+                                    targets.append({
+                                        "worksheet": target_sheet, "row_idx": int(item["row_idx"]),
+                                        "date_header": "Expected Shipping Date" if is_picking else date_col,
+                                        "line_id": item["line_id"], "request_id": item["request_id"],
+                                        "delivery_id": item["delivery_id"], "identity": item["identity"],
+                                        "expected_date": item["curr_date"], "expected_permit": item["permit_no"],
+                                    })
+                                requests_service.update_delivery_details(sh, targets, permit_no="" if clear_permit else new_permit)
+                            except Exception as error:
+                                st.error(f"ยังบันทึก Permit No. ไม่สำเร็จ: {error}")
+                            else:
+                                refresh_portal_data()
+                                st.session_state["delivery_reschedule_success"] = f"บันทึก Permit No. ให้ {len(targets):,} รายการแล้ว"
+                                st.rerun()
+
+            def display_permit_shipments(frame):
+                for permit_no, shipment in frame.groupby("Permit No.", sort=True, dropna=False):
+                    with st.container(border=True):
+                        st.markdown(f"**Permit No.: {escape(picking_text(permit_no)) or 'ยังไม่ระบุ'}**")
+                        volume = sum((clean_quantity(value) for value in shipment[vol_col]), 0.0) if vol_col else 0.0
+                        st.caption(f"{len(shipment):,} รายการ · Volume {volume:,.0f} g")
+                        display_delivery_table(shipment)
 
             render_section_heading(
                 "กำหนดการจัดส่ง", "เรียงวันส่งจากก่อนถึงหลัง พร้อมยอดรวมส่งของแต่ละวัน",
@@ -4132,12 +4238,12 @@ try:
                                 f'<div class="portal-day-volume__value">{daily_volume_display}</div>'
                                 '</div></div>', unsafe_allow_html=True,
                             )
-                            display_delivery_table(sub_display)
+                            display_permit_shipments(sub_display)
 
                     if not invalid_df.empty:
                         with st.container(border=True):
                             st.warning("⚠️ รายการต่อไปนี้มีรูปแบบวันที่ไม่ถูกต้อง กรุณาระบุวันจัดส่งใหม่หรือเลือก TBC")
-                            display_delivery_table(invalid_df.drop(columns=delivery_internal_columns, errors="ignore"))
+                            display_permit_shipments(invalid_df.drop(columns=delivery_internal_columns, errors="ignore"))
 
                     if not tbc_df.empty:
                         with st.container(key="delivery_pending", border=True):
@@ -4149,10 +4255,10 @@ try:
                                 unsafe_allow_html=True,
                             )
                             st.caption("กำหนดวันใหม่ได้ในส่วนปรับเปลี่ยนกำหนดการด้านบน รายการจะกลับไปเรียงตามวันส่งโดยอัตโนมัติ")
-                            display_delivery_table(tbc_df.drop(columns=delivery_internal_columns, errors="ignore"))
+                            display_permit_shipments(tbc_df.drop(columns=delivery_internal_columns, errors="ignore"))
                 else:
                     st.info("ℹ️ ไม่พบคอลัมน์วันที่จัดส่งในแท็บนี้")
-                    display_delivery_table(df_del.drop(columns=delivery_internal_columns, errors="ignore"))
+                    display_permit_shipments(df_del.drop(columns=delivery_internal_columns, errors="ignore"))
         else:
             st.info("ยังไม่มีข้อมูลในแท็บ 'Delivery_schedule'")
 
@@ -4393,7 +4499,7 @@ try:
                                         if picking_text(row.get("Request ID")) == history_id]
                         if not current_rows:
                             raise ValueError("ไม่พบ Request นี้แล้ว กรุณาโหลดข้อมูลใหม่")
-                        edit_columns = ["Line ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Expected Shipping Date", "Note"]
+                        edit_columns = ["Line ID", "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Project Owner", "Type", "Expected Shipping Date", "Note", "Permit No."]
                         editor_rows = [{column: row.get(column, "") for column in edit_columns} for row in current_rows]
                         for row in editor_rows:
                             row["Volume"] = picking_quantity(row["Volume"])
@@ -4431,7 +4537,7 @@ try:
             for _, row in df_pack_raw.iterrows():
                 converted_rows.append({
                     "Cultivar Name": row.get("Cultivar Name", ""), "Supplier Name": row.get("Supplier Name", ""), "Supplier Lot. No.": row.get("Source WIP Lot", ""),
-                    "Export Name": row.get("Export Name", ""), "THAI STICK Lot. No.": row.get("Generated FG Lot No.", ""),
+                    "Export Name": row.get("Export Name", ""), "THAI STICK Lot. No.": fg_display_lot(row.get("Generated FG Lot No.", "")),
                     "Category": "FG (Finished Goods)", "Grade": row.get("Grade", ""), "Receive date": row.get("Packing Date", ""),
                     "Quantity": clean_quantity(row.get("Quantity", 0)), "Remark Qty": "", "Inspection Req.": "No", "IR Req.": "No",
                     "Shipment date": "To be decided", "Type": "In House Product", "Status": "Packing done", "Packing date": row.get("Packing Date", ""),
