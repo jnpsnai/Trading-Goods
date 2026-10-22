@@ -1409,16 +1409,21 @@ def update_delivery_dates(spreadsheet, targets, new_value):
     return update_delivery_details(spreadsheet, targets, new_date=new_value)
 
 
-def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=None):
+def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=None, quantity=None):
     if not targets or (new_date is None and permit_no is None):
         raise ValidationError("กรุณาเลือกรายการและข้อมูลที่ต้องการแก้ไข")
     new_date = shipping_date(new_date) if new_date is not None else None
     permit_no = text(permit_no) if permit_no is not None else None
+    allocation = decimal_quantity(quantity, positive=True) if quantity is not None else None
+    if allocation is not None and permit_no is None:
+        raise ValidationError("กรุณาระบุ Permit No. สำหรับจำนวนที่แบ่ง")
     serializable = [{name: value for name, value in target.items() if name != "worksheet"}
                     | {"sheet": target["worksheet"].title} for target in targets]
-    operation = {"targets": serializable, "date": new_date, "permit_no": permit_no}
+    operation = {"targets": serializable, "date": new_date, "permit_no": permit_no,
+                 "quantity": str(allocation) if allocation is not None else None}
 
     def build(ctx):
+        seen, split_ids = set(), []
         for target in targets:
             title = target["worksheet"].title
             is_request = title == PICKING_SHEET_NAME
@@ -1437,6 +1442,10 @@ def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=No
             if len(matches) != 1:
                 raise ValidationError("รายการถูกย้ายหรือลบแล้ว กรุณาโหลด Delivery Issue ใหม่")
             row = matches[0]
+            identity = (title, row["Original_Row_Index"])
+            if identity in seen:
+                raise ValidationError("เลือกรายการเดิมซ้ำ กรุณาตรวจสอบรายการที่จะแบ่ง")
+            seen.add(identity)
             if "expected_date" not in target or text(row.get(date_header)) != text(target["expected_date"]):
                 raise ValidationError("วันจัดส่งเปลี่ยนไปแล้ว กรุณาโหลด Delivery Issue ใหม่")
             if "expected_permit" in target and permit_number(row) != text(target["expected_permit"]):
@@ -1447,6 +1456,47 @@ def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=No
             if is_request and key(row.get("Request Status")) in {"cancelled", "completed"}:
                 raise ValidationError("คำขอนี้ถูกยกเลิกหรือส่งครบแล้ว")
             changes = {}
+            if allocation is not None:
+                volume_header = "Volume" if is_request else target.get("volume_header", "Volume")
+                if volume_header not in plan.headers:
+                    raise ValidationError("ไม่พบคอลัมน์ Volume ของรายการที่เลือก")
+                if is_request:
+                    progress = request_progress(spreadsheet, [record for record in plan.records
+                                               if text(record.get("Request ID")) == text(row["Request ID"])])
+                    effective = next(record for record in progress if text(record["Line ID"]) == text(row["Line ID"]))
+                else:
+                    effective = row
+                total = decimal_quantity(row.get(volume_header), positive=True)
+                shipped = decimal_quantity(effective.get("Shipped Volume") or 0) if is_request else decimal_quantity(0)
+                remaining = total - shipped
+                if "expected_volume" in target and decimal_quantity(target["expected_volume"]) != remaining:
+                    raise ValidationError("จำนวนค้างส่งเปลี่ยนไปแล้ว กรุณาโหลดข้อมูลล่าสุด")
+                if allocation > remaining:
+                    raise ValidationError("จำนวนที่แบ่งให้ Permit มากกว่ายอดค้างส่ง")
+                if allocation < remaining:
+                    # Split demand only. Fulfillment keeps its original line ID.
+                    clone = {name: value for name, value in row.items() if name != "Original_Row_Index"}
+                    clone[volume_header] = number(allocation)
+                    clone["Permit No."] = permit_no
+                    for header in plan.headers:
+                        if "".join(character for character in header.casefold() if character.isalnum()) == "permitno":
+                            clone[header] = permit_no
+                    if is_request:
+                        clone["Line ID"] = text(row["Request ID"]) + "-SPLIT-" + uuid4().hex[:12].upper()
+                        clone["Shipped Volume"] = 0
+                        clone["Request Status"] = effective["Request Status"]
+                        changes["Shipped Volume"] = number(shipped)
+                        split_ids.append(clone["Line ID"])
+                    else:
+                        clone["Delivery ID"] = "DEL-" + uuid4().hex.upper()
+                        changes["Delivery ID"] = text(row.get("Delivery ID")) or "DEL-" + uuid4().hex.upper()
+                        split_ids.append(clone["Delivery ID"])
+                    if new_date is not None:
+                        clone[date_header] = new_date
+                    changes[volume_header] = number(total - allocation)
+                    ctx.update(plan, row["Original_Row_Index"], changes)
+                    ctx.append(plan, [clone])
+                    continue
             if new_date is not None:
                 changes[date_header] = new_date
             if permit_no is not None:
@@ -1456,7 +1506,7 @@ def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=No
             if not is_request:
                 changes["Delivery ID"] = text(row.get("Delivery ID")) or "DEL-" + uuid4().hex.upper()
             ctx.update(plan, row["Original_Row_Index"], changes)
-        return {"line_count": len(targets), "date": new_date, "permit_no": permit_no}
+        return {"line_count": len(targets), "date": new_date, "permit_no": permit_no, "split_ids": split_ids}
 
     return run_fenced_mutation(spreadsheet, operation_id("DELIVERY-DETAILS", operation), "DELIVERY_UPDATE", operation, build)
 '''
@@ -2276,15 +2326,28 @@ def fg_display_lot(value):
 
 def delivery_internal_lots(frame, main_records, packing_records):
     """Prefer generated FG lots over any reference to their source WIP lots."""
-    normalize = lambda value: re.sub(r"[^a-z0-9]", "", str(value).casefold())
+    normalize = lambda value: "".join(character for character in key(value) if character.isalnum())
     lot_columns = [column for column in frame if normalize(column) in {
         "lot", "lotno", "supplierlotno", "thaisticklotno", "generatedfglotno"}]
     internal_columns = [column for column in lot_columns if normalize(column) == "thaisticklotno"]
     generated_columns = [column for column in lot_columns if normalize(column) == "generatedfglotno"]
 
+    def field(record, aliases):
+        names = {normalize(alias) for alias in aliases}
+        return next((text(value) for header, value in record.items()
+                     if normalize(header) in names and text(value)), "")
+
     def same_product(row, record):
-        return not any(text(row.get(field)) and key(row[field]) != key(record.get(field))
-                       for field in ("Cultivar Name", "Grade", "Supplier Name"))
+        aliases = ("Cultivar Name", "Cultivar", "Cultivar / Product", "Product", "ชื่อสายพันธุ์")
+        cultivar = field(row, aliases)
+        if key(cultivar) in {"", "tbc", "tbd", "-", "—"} or key(cultivar) != key(field(record, aliases)):
+            return False
+        grade = field(row, ("Grade", "Size", "เกรด"))
+        if key(grade) not in {"", "tbc", "tbd", "-", "—"} and key(grade) != key(field(record, ("Grade", "Size", "เกรด"))):
+            return False
+        supplier = field(row, ("Supplier Name", "Supplier"))
+        actual = field(record, ("Supplier Name", "Supplier"))
+        return not supplier or bool(parts(supplier) & parts(actual))
 
     def parts(value):
         return {key(value), *(key(part) for part in re.split(r"[,;|+]|\\s+/\\s+", text(value)) if text(part))}
@@ -2309,14 +2372,15 @@ def delivery_internal_lots(frame, main_records, packing_records):
         for record in main_records:
             internal = text(record.get("THAI STICK Lot. No."))
             candidates = {key(internal), key(record.get("Supplier Lot. No."))}
-            if internal and references & candidates and same_product(row, record):
+            if internal and "fg" in key(record.get("Category")) and references & candidates and same_product(row, record):
                 generated = next((text(value) for header, value in record.items() if normalize(header) == "generatedfglotno"), "")
                 display = fg_display_lot(generated or internal) if "fg" in key(record.get("Category")) else internal
                 if display not in matches:
                     matches.append(display)
         if matches:
             return " / ".join(matches)
-        return next((fg_display_lot(row.get(column)) for column in internal_columns if text(row.get(column))), "—")
+        # A cached WIP list is not proof of an FG lot. Never echo it on a failed match.
+        return "—"
 
     result = frame.drop(columns=lot_columns).copy()
     result["THAI STICK Lot No."] = frame.apply(resolve, axis=1) if not frame.empty else pd.Series(dtype=str)
@@ -2750,7 +2814,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = 'c76583f80fc5543a0ae5ca7630a806e92842b3d3b6f8b1fbab960b54c1a424a3'
+_embedded_bundle = '8e22d172e615238e8b47d612679ee9c58baef5fcd84660ee51d9bef93c4175d2'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -4080,6 +4144,7 @@ try:
                                                         "line_id": picking_text(r.get("Line ID")) if row_source == "picking" else "",
                                                         "request_id": picking_text(r.get("Request ID")) if row_source == "picking" else "",
                                                         "delivery_id": picking_text(r.get("Delivery ID")), "permit_no": core.permit_number(r),
+                                                        "volume": clean_quantity(vol),
                                                         "identity": {field: picking_text(r.get(field)) for field in [
                                                             cultivar_column, grade_column,
                                                             find_delivery_column(df_del.columns, "Consignee"),
@@ -4158,11 +4223,14 @@ try:
                                     st.rerun()
 
             with st.expander("🪪 เพิ่ม / แก้ไข Permit No. ของรายการจัดส่ง"):
-                st.caption("เลือกรายการเดิมได้หลายรายการแล้วกำหนด Permit No. เดียวกัน โดยคงวันส่งและยอดเดิมไว้")
+                st.caption("แบ่งจำนวนจากรายการเดิมไป Permit ใหม่ได้ ยอดส่วนที่เหลือจะคงอยู่ใน Permit เดิม โดยยอดรวมและสต็อกไม่เปลี่ยน")
                 with st.form("delivery_permit_form"):
                     permit_items = st.multiselect("เลือกรายการสำหรับ Permit No.", list(stable_map),
                                                   format_func=reschedule_labels.get, key="delivery_permit_items")
                     new_permit = st.text_input("Permit No.", key="delivery_permit_value")
+                    permit_quantity = st.number_input("จำนวนที่จะจัดให้ Permit นี้ต่อรายการ (g) · 0 = ทั้งรายการ",
+                                                      min_value=0.0, value=0.0, step=1.0, format="%.0f", key="delivery_permit_quantity")
+                    st.caption("ตัวอย่าง: ยอด 100,000 แบ่ง 40,000 ให้ Permit A จะเหลือ 60,000 ในรายการเดิม เพื่อนำไปกำหนด Permit B ต่อได้")
                     clear_permit = st.checkbox("ล้าง Permit No. ของรายการที่เลือก", key="delivery_permit_clear")
                     if st.form_submit_button("บันทึก Permit No.", disabled=not can_write()):
                         if not permit_items or (not clear_permit and not new_permit.strip()):
@@ -4182,13 +4250,15 @@ try:
                                         "line_id": item["line_id"], "request_id": item["request_id"],
                                         "delivery_id": item["delivery_id"], "identity": item["identity"],
                                         "expected_date": item["curr_date"], "expected_permit": item["permit_no"],
+                                        "volume_header": "Volume" if is_picking else vol_col, "expected_volume": item["volume"],
                                     })
-                                requests_service.update_delivery_details(sh, targets, permit_no="" if clear_permit else new_permit)
+                                requests_service.update_delivery_details(sh, targets, permit_no="" if clear_permit else new_permit,
+                                                                        quantity=permit_quantity if permit_quantity > 0 else None)
                             except Exception as error:
                                 st.error(f"ยังบันทึก Permit No. ไม่สำเร็จ: {error}")
                             else:
                                 refresh_portal_data()
-                                st.session_state["delivery_reschedule_success"] = f"บันทึก Permit No. ให้ {len(targets):,} รายการแล้ว"
+                                st.session_state["delivery_reschedule_success"] = f"บันทึก Permit No. และจัดจำนวนให้ {len(targets):,} รายการแล้ว"
                                 st.rerun()
 
             def display_permit_shipments(frame):
