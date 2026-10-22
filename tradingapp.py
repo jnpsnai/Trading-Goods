@@ -4111,6 +4111,11 @@ try:
                 display_frame = format_df_quantity(delivery_internal_lots(
                     frame, get_cached_data("main", sheet), get_cached_data("packing", packing_records_sheet),
                 ))
+                hidden_columns = [find_delivery_column(display_frame.columns, field)
+                                  for field in ["Expected Shipping Date", "Type", "Consignee"]]
+                hidden_columns += [column for column in display_frame.columns
+                                   if re.sub(r"[^a-z0-9]", "", str(column).casefold()) == "permitno"]
+                display_frame = display_frame.drop(columns=hidden_columns, errors="ignore")
                 if "Status (ความพร้อม)" in display_frame.columns:
                     status_styles = {
                         "✅ พร้อมส่ง": "background-color: #ecfdf5; color: #047857; font-weight: 600",
