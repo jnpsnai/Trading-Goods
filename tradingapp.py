@@ -3256,6 +3256,24 @@ def render_cancellation_panel(sh, kinds=None, key_prefix="transaction_cancel"):
     writable = bool(st.session_state.get("portal_can_write", True))
     allowed = {kinds} if isinstance(kinds, str) else set(kinds) if kinds is not None else set(KIND_LABELS)
     allowed = {core.text(kind).upper() for kind in allowed}
+    if state["pending"]:
+        attempt = state["pending"]
+        if not attempt.get("target_kind"):
+            # Recover older session drafts without discarding an uncertain write.
+            try:
+                matches = [row for row in get_display_records(sh, "Inventory_Transactions")
+                           if core.text(row.get("Transaction ID")) == attempt["target_transaction_id"]]
+            except Exception as error:
+                st.error(f"ตรวจสอบประเภทรายการที่ค้างไม่สำเร็จ: {read_error_message(error)}")
+                return
+            if len(matches) != 1 or core.text(matches[0].get("Kind")).upper() not in KIND_LABELS:
+                st.warning("ยังระบุประเภทรายการยกเลิกที่ค้างไม่ได้ กรุณารีเฟรชข้อมูลเพื่อตรวจสอบอีกครั้ง")
+                return
+            attempt["target_kind"] = core.text(matches[0]["Kind"]).upper()
+        if attempt["target_kind"] not in allowed:
+            label = KIND_LABELS.get(attempt["target_kind"], attempt["target_kind"])
+            st.info(f"มีรายการยกเลิก {label} ที่ยังต้องตรวจสอบผล กรุณากลับไปยังโมดูลของรายการนั้นเพื่อดำเนินการต่อ")
+            return
     with st.expander("↩️ ยกเลิกธุรกรรมที่บันทึกแล้ว", expanded=bool(state["pending"])):
         st.caption("เลือกธุรกรรมที่ใส่ข้อมูลผิด ระบบจะตรวจและย้อนผลของรายการพร้อมเก็บประวัติ หากมีรายการนำไปใช้ต่อ ให้ยกเลิกรายการหลังสุดก่อน")
         if not writable:
@@ -3311,7 +3329,8 @@ def render_cancellation_panel(sh, kinds=None, key_prefix="transaction_cancel"):
         if st.button("ยืนยันยกเลิกธุรกรรม", key=f"{key_prefix}_submit", type="primary",
                      disabled=not writable or not core.text(reason) or not confirmed, width="stretch"):
             attempt = {"cancellation_id": "CANCEL-" + uuid4().hex,
-                       "target_transaction_id": selected, "reason": core.text(reason)}
+                       "target_transaction_id": selected, "reason": core.text(reason),
+                       "target_kind": core.text(receipt["Kind"]).upper()}
             state["pending"] = attempt
             _execute(sh, state, attempt)
         _history(rows, key_prefix)
@@ -4122,7 +4141,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = 'f36a49777d98925c4b6de4f880effb2cd12b95960ed6b6ef5f085c0c0863c675'
+_embedded_bundle = '4e3aeccf51ac932fa20a4ed07dd918bb2a5fdfb88ae9fec3a610cf751d17016e'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -5285,14 +5304,15 @@ try:
     st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing (Pastel Theme)")
 
     cancellation_scopes = {
-        "🚨 Delivery Issue": {"DELIVERY_UPDATE", "SHIP"},
+        "🚨 Delivery Issue": {"DELIVERY_UPDATE"},
         "📋 Picking Request": {"PICKING_CREATE", "PICKING_EDIT", "PICKING_CANCEL"},
         "📝 Trading Goods Registration": {"RECEIPT"},
-        "✏️ Edit Registration": {"ADJUST", "RECEIPT"},
+        "✏️ Edit Registration": {"ADJUST"},
         "📦 Packing Module": {"PACK"},
         "🚚 Shipped Out Module": {"SHIP"},
     }
-    render_cancellation_panel(sh, kinds=cancellation_scopes.get(menu), key_prefix="portal_cancel")
+    if menu in cancellation_scopes:
+        render_cancellation_panel(sh, kinds=cancellation_scopes[menu], key_prefix="portal_cancel")
 
 
     # ==========================================
