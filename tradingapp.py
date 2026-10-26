@@ -51,6 +51,7 @@ MOVEMENT_HEADERS = [
     "Line ID", "Created At", "Supplier Name", "Note",
 ]
 TRANSACTION_HEADERS = ["Transaction ID", "Kind", "Payload Hash", "Created At", "Result JSON"]
+CANCELLATION_HEADERS = ["Transaction Status", "Cancelled By", "Cancelled At", "Cancel Reason"]
 SOURCE_MAIN = "main"
 SOURCE_PACKING = "packing_records"
 ZERO = Decimal("0")
@@ -77,6 +78,11 @@ def text(value: Any) -> str:
 
 def key(value: Any) -> str:
     return " ".join(text(value).split()).casefold()
+
+
+def is_cancelled(record: Mapping[str, Any]) -> bool:
+    """Soft-voided transaction rows are distinct from a cancelled request."""
+    return key(record.get("Transaction Status")) in {"cancelled", "canceled", "void"}
 
 
 def permit_number(record: Mapping[str, Any]) -> str:
@@ -281,7 +287,7 @@ def inventory_from_records(main_records: Iterable[Mapping[str, Any]],
                 continue
             quantity = decimal_quantity(record.get("Quantity"), field=f"จำนวนของแถว {row_number}")
             status = key(record.get("Status"))
-            available = quantity > ZERO and status != "delivered"
+            available = quantity > ZERO and status not in {"delivered", "cancelled", "canceled"} and not is_cancelled(record)
             fingerprint = record_fingerprint(record, list(base) + list(metadata))
             inventory_id = text(record.get("Inventory ID")) or f"LEGACY-{source}-{row_number}-{fingerprint[:16]}"
             if inventory_id in identifiers:
@@ -449,7 +455,7 @@ from trading_core import inventory_from_records, now_bangkok, parse_sheet
 
 DISPLAY_TTL = 120
 DISPLAY_TITLES = ("Packing_Records", "Packing_Log", "Shipped_Out_Log",
-                  "Picking_Requests", "Delivery_schedule", "Stock_Movements")
+                  "Picking_Requests", "Delivery_schedule", "Stock_Movements", "Inventory_Transactions")
 
 
 class SheetsReadLimitError(RuntimeError):
@@ -697,6 +703,7 @@ from decimal import Decimal
 from hashlib import sha256
 import json
 import secrets
+from copy import deepcopy
 from typing import Any, Callable
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -706,7 +713,7 @@ from trading_core import (
     MAIN_HEADERS, PACK_HEADERS, PACK_LOG_HEADERS, SHIP_HEADERS,
     MAIN_META_HEADERS, PACK_META_HEADERS, MOVEMENT_HEADERS, TRANSACTION_HEADERS,
     ValidationError, decimal_quantity, inventory_from_records, key, now_bangkok,
-    parse_date, parse_sheet, read_records, text, today_bangkok, number, permit_number,
+    parse_date, parse_sheet, read_records, text, today_bangkok, number, permit_number, is_cancelled,
 )
 
 
@@ -722,6 +729,26 @@ PACK_LOG_META_HEADERS = ["Transaction ID", "Batch ID", "Source Details"]
 PICKING_LIFECYCLE_HEADERS = ["Request Status", "Shipped Volume"]
 _ZERO = Decimal("0")
 _WRITE_GUARD = None
+JOURNAL_HEADERS = ["Undo JSON", "Transaction Status", "Cancelled By", "Cancelled At", "Cancel Reason"]
+ROW_ID_HEADER = "Transaction Row ID"
+_JOURNAL_SYSTEM_FIELDS = {"Inventory ID", "Initial Qty", "Produced Qty", "Created Transaction ID", "Last Transaction ID",
+                          ROW_ID_HEADER, "Original_Row_Index", *JOURNAL_HEADERS}
+
+
+def _journal_sheet(title):
+    return title not in {MOVEMENT_SHEET_NAME, TRANSACTION_SHEET_NAME, LOCK_SHEET_NAME}
+
+
+def _cell_equal(header, left, right):
+    """Sheets formats numbers differently from JSON; identifiers stay strings."""
+    numeric = {"Quantity", "Volume", "Shipped Volume", "Waste Qty", "Produced Qty", "Initial Qty",
+               "Shipped Qty", "Total Packed Qty", "Quantity Change", "Balance After"}
+    if (header in numeric or "volume" in key(header)) and text(left) and text(right):
+        try:
+            return Decimal(text(left).replace(",", "")) == Decimal(text(right).replace(",", ""))
+        except Exception:
+            return False
+    return text(left) == text(right)
 
 
 def set_write_guard(guard):
@@ -838,6 +865,9 @@ class MutationContext:
         self.operation_id = operation_id
         self.requests = []
         self.plans = {}
+        self.journal_updates = {}
+        self.journal_appends = []
+        self.row_counter = 0
         # One fresh metadata snapshot belongs to this fenced operation only.
         # Looking up each title through gspread would issue another API read.
         worksheets = spreadsheet.worksheets()
@@ -921,6 +951,24 @@ class MutationContext:
     def update(self, plan, row_number, values):
         if int(row_number) < 2:
             raise ValidationError("ไม่อนุญาตให้แก้ข้อมูลทับหัวตาราง")
+        values = dict(values)
+        if _journal_sheet(plan.title):
+            identity = (plan.title, int(row_number))
+            entry = self.journal_updates.get(identity)
+            if entry is None:
+                matches = [row for row in plan.records if int(row["Original_Row_Index"]) == int(row_number)]
+                if len(matches) != 1:
+                    raise ValidationError("ไม่พบแถวที่จะบันทึก กรุณาโหลดข้อมูลใหม่")
+                before = {key: value for key, value in matches[0].items() if key != "Original_Row_Index"}
+                entry = {"sheet": plan.title, "sheet_id": plan.id, "row": int(row_number),
+                         "append": False, "before": deepcopy(before), "after": deepcopy(before), "fields": []}
+                self.journal_updates[identity] = entry
+            business = [name for name in values if name not in _JOURNAL_SYSTEM_FIELDS]
+            if business and not text(entry["after"].get(ROW_ID_HEADER)):
+                self.row_counter += 1
+                values[ROW_ID_HEADER] = f"{self.operation_id}:ROW:{self.row_counter}"
+            entry["after"].update(deepcopy(values))
+            entry["fields"] = list(dict.fromkeys([*entry["fields"], *business]))
         self.ensure_columns(plan, values.keys())
         # Update only named cells; external columns and formulas are preserved.
         for header, value in values.items():
@@ -930,14 +978,38 @@ class MutationContext:
             }})
 
     def append(self, plan, records):
-        records = list(records)
+        records = [dict(record) for record in records]
         if not records:
             return
+        if _journal_sheet(plan.title):
+            for record in records:
+                self.row_counter += 1
+                # Clones may carry their parent's row token. Every append gets
+                # its own immutable identity, including otherwise identical logs.
+                record[ROW_ID_HEADER] = f"{self.operation_id}:ROW:{self.row_counter}"
+                self.journal_appends.append({"sheet": plan.title, "sheet_id": plan.id, "append": True,
+                                             "before": None, "after": deepcopy(record),
+                                             "fields": [name for name in record if name not in _JOURNAL_SYSTEM_FIELDS]})
         self.ensure_columns(plan, [header for record in records for header in record])
         self.requests.append({"appendCells": {
             "sheetId": plan.id, "fields": "userEnteredValue",
             "rows": [{"values": [_cell(record.get(header)) if header in record else {} for header in plan.headers]} for record in records],
         }})
+
+    def undo_json(self):
+        changes = []
+        for entry in self.journal_updates.values():
+            changed = [name for name in entry["fields"]
+                       if not _cell_equal(name, entry["before"].get(name), entry["after"].get(name))]
+            if changed:
+                saved = deepcopy(entry)
+                saved["fields"] = changed
+                changes.append(saved)
+        changes.extend(deepcopy(self.journal_appends))
+        encoded = _json({"version": 1, "changes": changes})
+        if len(encoded) > 45000:
+            raise ValidationError("รายการนี้มีรายละเอียดมากเกินเก็บประวัติยกเลิกในครั้งเดียว กรุณาแยกบันทึกเป็นรายการย่อย")
+        return encoded
 
 
 def _lease_data(worksheet):
@@ -1009,6 +1081,9 @@ def _transaction_receipt(records, transaction_id, kind, digest):
     except (TypeError, ValueError):
         result = {}
     result.update(transaction_id=transaction_id, already_saved=True)
+    if key(matches[0].get("Transaction Status")) in {"cancelled", "canceled"}:
+        result.update(transaction_cancelled=True, cancelled_by=text(matches[0].get("Cancelled By")),
+                      cancel_reason=text(matches[0].get("Cancel Reason")))
     return result
 
 
@@ -1025,7 +1100,7 @@ def get_transaction_result(spreadsheet, transaction_id, kind, payload):
     return _existing_transaction(spreadsheet, transaction_id, kind, _payload_hash(kind, payload))
 
 
-def run_fenced_mutation(spreadsheet, transaction_id, kind, payload, builder):
+def run_fenced_mutation(spreadsheet, transaction_id, kind, payload, builder, *, allow_reapply_after_cancel=False):
     """Run a fresh-reading builder under the workbook lease and commit once.
 
     ``builder(context)`` may queue named-cell updates and appends, then returns a
@@ -1038,21 +1113,37 @@ def run_fenced_mutation(spreadsheet, transaction_id, kind, payload, builder):
     if not transaction_id:
         raise ValidationError("กรุณาระบุหมายเลขธุรกรรม")
     digest = _payload_hash(kind, payload)
-    existing = _existing_transaction(spreadsheet, transaction_id, kind, digest)
-    if existing is not None:
-        return existing
+    # Planning operations derive IDs from their payload. After an intentional
+    # undo, the same edit is a new operation, while transport retries must still
+    # converge on one receipt. Chain from the confirmed cancellation's ID.
+    while True:
+        existing = _existing_transaction(spreadsheet, transaction_id, kind, digest)
+        if existing is None:
+            break
+        if not existing.get("transaction_cancelled"):
+            return existing
+        if not allow_reapply_after_cancel:
+            raise ValidationError("ธุรกรรมนี้ถูกยกเลิกแล้ว กรุณาเริ่มรายการใหม่แทนการส่งรายการเดิมซ้ำ")
+        cancelled_by = text(existing.get("cancelled_by"))
+        if not cancelled_by:
+            raise ValidationError("ประวัติการยกเลิกไม่ครบ กรุณาตรวจธุรกรรมก่อนทำรายการซ้ำ")
+        transaction_id = "REAPPLY-" + sha256((transaction_id + ":" + cancelled_by).encode()).hexdigest()[:32]
     sheet_id, owner = _acquire_lease(spreadsheet, transaction_id)
     lease_released = False
     try:
         context = MutationContext(spreadsheet, transaction_id)
-        transactions = context.worksheet_plan(TRANSACTION_SHEET_NAME, TRANSACTION_HEADERS, create=True)
+        transactions = context.worksheet_plan(TRANSACTION_SHEET_NAME, TRANSACTION_HEADERS, JOURNAL_HEADERS, create=True)
         existing = _transaction_receipt(transactions.records, transaction_id, kind, digest)
         if existing is not None:
+            if existing.get("transaction_cancelled"):
+                raise ValidationError("ธุรกรรมนี้ถูกยกเลิกแล้ว กรุณาเริ่มรายการใหม่")
             return existing
         result = dict(builder(context) or {})
         result.update(transaction_id=transaction_id, already_saved=False)
+        undo_json = "" if kind == "CANCEL" else context.undo_json()
         context.append(transactions, [{"Transaction ID": transaction_id, "Kind": kind, "Payload Hash": digest,
-                                       "Created At": now_bangkok().isoformat(), "Result JSON": _json(result)}])
+                                       "Created At": now_bangkok().isoformat(), "Result JSON": _json(result),
+                                       "Undo JSON": undo_json, "Transaction Status": "Active"}])
         context.requests.append({"deleteSheet": {"sheetId": sheet_id}})
         try:
             spreadsheet.batch_update({"requests": context.requests})
@@ -1096,7 +1187,13 @@ def _prepare_inventory(context):
     plans = _inventory_plans(context)
     items = inventory_from_records(plans["main"].records, plans["packing_records"].records, include_unavailable=True)
     lookup = {item["inventory_id"]: item for item in items}
-    movements = context.worksheet_plan(MOVEMENT_SHEET_NAME, MOVEMENT_HEADERS, create=True)
+    movements = context.worksheet_plan(MOVEMENT_SHEET_NAME, MOVEMENT_HEADERS, ["Reverses Transaction ID"], create=True)
+    # Reversal rows remain part of the balance proof, but cancelled operations
+    # must not force a corrected entry onto the date of cancellation. OPENING
+    # checkpoints belong to baseline adoption and are never undone.
+    receipts = context.plans.get(TRANSACTION_SHEET_NAME)
+    cancelled_ids = {text(row.get("Transaction ID")) for row in receipts.records if is_cancelled(row)} if receipts else set()
+    cancellation_ids = {text(row.get("Cancelled By")) for row in receipts.records if is_cancelled(row)} if receipts else set()
     dates = []
     tracked = {}
     event_ids = set()
@@ -1137,7 +1234,12 @@ def _prepare_inventory(context):
                     f"ยอดล็อต {item['lot'] or item['inventory_id']} ในชีต ({effective:,.2f} g) ไม่ตรงกับประวัติ "
                     f"({recorded_balance:,.2f} g) กรุณาตรวจสอบและคืนค่าชีตให้ตรงกับประวัติก่อนทำรายการ ห้ามแก้ยอดตรงใน Google Sheets"
                 )
-            item["latest_movement_date"] = max(parse_date(row["Movement Date"]) for row in history)
+            active_history = [row for row in history
+                              if text(row.get("Movement Type")).upper() == "OPENING"
+                              or (text(row.get("Transaction ID")) not in cancelled_ids
+                                  and not (text(row.get("Movement Type")).upper().startswith("CANCEL_")
+                                           and text(row.get("Transaction ID")) in cancellation_ids))]
+            item["latest_movement_date"] = max(parse_date(row["Movement Date"]) for row in active_history) if active_history else min(parse_date(row["Movement Date"]) for row in history)
         else:
             # Existing/imported inventory may already have an ID but no ledger.
             # It still needs a baseline before its first decrement, otherwise a
@@ -1196,7 +1298,7 @@ def _find_item(lookup, reference):
 
 
 def _validate_eligible(item, category=None):
-    if key(item["record"].get("Status")) == "delivered" or item["quantity"] <= 0:
+    if is_cancelled(item["record"]) or key(item["record"].get("Status")) in {"delivered", "cancelled", "canceled"} or item["quantity"] <= 0:
         raise ValidationError("สินค้านี้ไม่มีสต็อกที่ใช้งานได้แล้ว กรุณาเลือกล็อตอื่น")
     if category and category not in text(item["category"]).upper():
         raise ValidationError(f"รายการนี้ต้องใช้สินค้า {category} เท่านั้น")
@@ -1266,6 +1368,8 @@ def update_registration(spreadsheet, transaction_id, inventory_id, record, expec
         item = _find_item(lookup, {"inventory_id": inventory_id, "fingerprint": expected if isinstance(expected, str) else (expected or {}).get("fingerprint", "")})
         if item["source"] != "main":
             raise ValidationError("แก้ไขทะเบียนได้เฉพาะสินค้าใน Trading Data")
+        if is_cancelled(item["record"]) or key(item["record"].get("Status")) in {"cancelled", "canceled"}:
+            raise ValidationError("ทะเบียนนี้ถูกยกเลิกแล้ว กรุณาสร้างรายการรับเข้าใหม่")
         prepared = _validate_receipt(record, allow_zero=True)
         if parse_date(prepared["Receive date"]) > today_bangkok():
             raise ValidationError("วันที่รับเข้าสินค้าจริงต้องไม่เป็นวันในอนาคต")
@@ -1376,6 +1480,8 @@ def ship_inventory(spreadsheet, transaction_id, lines, metadata):
         request_rows = {}
         request_line_ids = set()
         for row in request_plan.records if request_plan else []:
+            if is_cancelled(row):
+                continue
             request_id, line_id = text(row.get("Request ID")), text(row.get("Line ID"))
             if not request_id and not line_id:
                 continue
@@ -1388,6 +1494,8 @@ def ship_inventory(spreadsheet, transaction_id, lines, metadata):
         logs = context.worksheet_plan("Shipped_Out_Log", SHIP_HEADERS, SHIP_META_HEADERS, create=True)
         if request_plan is not None:
             for row in logs.records:
+                if is_cancelled(row):
+                    continue
                 request_key = (text(row.get("Request ID")), text(row.get("Line ID")))
                 if request_key[0] and request_key[1]:
                     logged_shipped[request_key] = logged_shipped.get(request_key, _ZERO) + decimal_quantity(row.get("Shipped Qty"), field="ยอดส่งในประวัติ")
@@ -1451,7 +1559,7 @@ def ship_inventory(spreadsheet, transaction_id, lines, metadata):
         if request_plan is not None:
             affected_requests = {request_id for request_id, _ in requested_deltas}
             for request_id in affected_requests:
-                rows = [row for row in request_plan.records if text(row.get("Request ID")) == request_id]
+                rows = [row for row in request_plan.records if text(row.get("Request ID")) == request_id and not is_cancelled(row)]
                 quantities = [(decimal_quantity(row.get("Volume"), positive=True),
                                new_shipped.get((request_id, text(row.get("Line ID"))), fulfilled[(request_id, text(row.get("Line ID")))])) for row in rows]
                 status = "Completed" if all(sent >= wanted for wanted, sent in quantities) else "Partial" if any(sent > 0 for _, sent in quantities) else "Open"
@@ -1481,7 +1589,7 @@ import json
 from uuid import uuid4
 
 from trading_core import (
-    ValidationError, decimal_quantity, key, number, parse_date, text, permit_number,
+    ValidationError, decimal_quantity, key, number, parse_date, text, permit_number, is_cancelled,
 )
 from trading_transactions import read_history, run_fenced_mutation
 
@@ -1500,10 +1608,14 @@ OPTIONAL_HEADERS = [name for name in PICKING_HEADERS if name not in PICKING_BASE
 
 def request_progress(spreadsheet, rows, *, shipments=None):
     """Use linked shipment history if a manually edited counter is stale."""
+    rows = [row for row in rows if not is_cancelled(row)
+            and (text(row.get("Request ID")) or text(row.get("Line ID")))]
     if not rows:
         return []
     sent = {}
     for shipment in read_history(spreadsheet, "Shipped_Out_Log") if shipments is None else shipments:
+        if is_cancelled(shipment):
+            continue
         identity = (text(shipment.get("Request ID")), text(shipment.get("Line ID")))
         if all(identity):
             sent[identity] = sent.get(identity, 0) + decimal_quantity(shipment.get("Shipped Qty"))
@@ -1590,7 +1702,7 @@ def save_picking_request(spreadsheet, request_id, created_at, lines, date_value)
 
     def build(ctx):
         plan = ctx.worksheet_plan(PICKING_SHEET_NAME, PICKING_BASE_HEADERS, OPTIONAL_HEADERS, create=True)
-        existing = [row for row in plan.records if text(row.get("Request ID")) == request_id]
+        existing = [row for row in plan.records if text(row.get("Request ID")) == request_id and not is_cancelled(row)]
         if existing:
             if not same_payload(existing, payload):
                 raise ValidationError("พบ Request ID เดิมแต่ข้อมูลไม่ตรง กรุณาตรวจประวัติคำขอ")
@@ -1627,16 +1739,28 @@ def update_picking_request(spreadsheet, request_id, expected_rows, lines):
 
     def build(ctx):
         plan = ctx.worksheet_plan(PICKING_SHEET_NAME, PICKING_BASE_HEADERS, OPTIONAL_HEADERS)
+        # Cancelled appended lines retain their audit IDs. Never allocate one
+        # of those IDs to a new line when editing the request again.
+        effective_payload = [dict(row) for row in payload]
+        reserved = {text(row.get("Line ID")) for row in plan.records if text(row.get("Line ID"))}
+        candidate_index = next_index
+        for row in effective_payload:
+            if row["Line ID"] in originals:
+                continue
+            while row["Line ID"] in reserved:
+                row["Line ID"] = f"{request_id}-{candidate_index:03d}"
+                candidate_index += 1
+            reserved.add(row["Line ID"])
         current = request_progress(spreadsheet, [row for row in plan.records if text(row.get("Request ID")) == request_id],
                                    shipments=ctx.read_history("Shipped_Out_Log"))
         if any(key(row.get("Request Status")) == "cancelled" for row in current):
             raise ValidationError("คำขอนี้ถูกยกเลิกแล้ว")
         # Another stock transaction can have shipped a line while the editor was open.
         if not same_payload(current, expected_rows):
-            if same_payload(current, payload):
-                return {"request_id": request_id, "line_count": len(payload), "already_saved": True}
+            if same_payload(current, effective_payload):
+                return {"request_id": request_id, "line_count": len(effective_payload), "already_saved": True}
             raise ValidationError("Request หรือยอดส่งถูกแก้ไขแล้ว กรุณาเปิดข้อมูลล่าสุดก่อนแก้ไข")
-        by_id = {row["Line ID"]: row for row in payload}
+        by_id = {row["Line ID"]: row for row in effective_payload}
         for row in current:
             shipped = decimal_quantity(row.get("Shipped Volume") or 0)
             changed = by_id.get(text(row.get("Line ID")))
@@ -1645,10 +1769,10 @@ def update_picking_request(spreadsheet, request_id, expected_rows, lines):
                 raise ValidationError("รายการที่ส่งแล้วไม่สามารถลบหรือเปลี่ยนสายพันธุ์/เกรดได้")
             if changed and decimal_quantity(changed["Volume"]) < shipped:
                 raise ValidationError("จำนวนคำขอต้องไม่น้อยกว่ายอดที่ส่งแล้ว")
-        total = sum(decimal_quantity(row["Volume"]) for row in payload)
-        shipped = sum(decimal_quantity(row.get("Shipped Volume") or 0) for row in payload)
+        total = sum(decimal_quantity(row["Volume"]) for row in effective_payload)
+        shipped = sum(decimal_quantity(row.get("Shipped Volume") or 0) for row in effective_payload)
         lifecycle = "Completed" if shipped >= total else "Partial" if shipped else "Open"
-        for row in payload:
+        for row in effective_payload:
             row["Request Status"] = lifecycle
         for row in current:
             replacement = by_id.get(text(row.get("Line ID")))
@@ -1657,13 +1781,13 @@ def update_picking_request(spreadsheet, request_id, expected_rows, lines):
                 if "".join(character for character in header.casefold() if character.isalnum()) == "permitno":
                     changes[header] = changes.get("Permit No.")
             ctx.update(plan, row["Original_Row_Index"], changes)
-        new_rows = [row for row in payload if row["Line ID"] not in originals]
+        new_rows = [row for row in effective_payload if row["Line ID"] not in originals]
         if new_rows:
             ctx.append(plan, new_rows)
-        return {"request_id": request_id, "line_count": len(payload), "already_saved": False}
+        return {"request_id": request_id, "line_count": len(effective_payload), "already_saved": False}
 
     operation = {"request_id": request_id, "expected": _snapshot(expected_rows), "lines": payload}
-    return run_fenced_mutation(spreadsheet, operation_id("PICK-EDIT", operation), "PICKING_EDIT", operation, build)
+    return run_fenced_mutation(spreadsheet, operation_id("PICK-EDIT", operation), "PICKING_EDIT", operation, build, allow_reapply_after_cancel=True)
 
 
 def _snapshot(rows):
@@ -1688,7 +1812,7 @@ def delete_picking_request(spreadsheet, request_id, expected_rows):
         return {"request_id": request_id, "line_count": len(current), "already_deleted": already or not current}
 
     operation = {"request_id": request_id, "expected": _snapshot(expected_rows)}
-    return run_fenced_mutation(spreadsheet, operation_id("PICK-CANCEL", operation), "PICKING_CANCEL", operation, build)
+    return run_fenced_mutation(spreadsheet, operation_id("PICK-CANCEL", operation), "PICKING_CANCEL", operation, build, allow_reapply_after_cancel=True)
 
 
 def update_delivery_dates(spreadsheet, targets, new_value):
@@ -1720,12 +1844,12 @@ def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=No
             if new_date is not None and date_header not in plan.headers:
                 raise ValidationError("ไม่พบคอลัมน์วันที่จัดส่ง")
             if target.get("line_id"):
-                matches = [row for row in plan.records if text(row.get("Line ID")) == text(target["line_id"])
+                matches = [row for row in plan.records if not is_cancelled(row) and text(row.get("Line ID")) == text(target["line_id"])
                            and text(row.get("Request ID")) == text(target.get("request_id"))]
             elif target.get("delivery_id"):
-                matches = [row for row in plan.records if text(row.get("Delivery ID")) == text(target["delivery_id"])]
+                matches = [row for row in plan.records if not is_cancelled(row) and text(row.get("Delivery ID")) == text(target["delivery_id"])]
             else:
-                matches = [row for row in plan.records if row["Original_Row_Index"] == int(target["row_idx"])]
+                matches = [row for row in plan.records if not is_cancelled(row) and row["Original_Row_Index"] == int(target["row_idx"])]
             if len(matches) != 1:
                 raise ValidationError("รายการถูกย้ายหรือลบแล้ว กรุณาโหลด Delivery Issue ใหม่")
             row = matches[0]
@@ -1800,7 +1924,7 @@ def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=No
             ctx.update(plan, row["Original_Row_Index"], changes)
         return {"line_count": len(targets), "date": new_date, "permit_no": permit_no, "split_ids": split_ids}
 
-    return run_fenced_mutation(spreadsheet, operation_id("DELIVERY-DETAILS", operation), "DELIVERY_UPDATE", operation, build)
+    return run_fenced_mutation(spreadsheet, operation_id("DELIVERY-DETAILS", operation), "DELIVERY_UPDATE", operation, build, allow_reapply_after_cancel=True)
 '''
 
 # Embedded application module: trading_reports.py
@@ -1819,7 +1943,7 @@ from typing import Any, Iterable, Mapping
 
 import pandas as pd
 
-from trading_core import key, parse_date, text, today_bangkok
+from trading_core import is_cancelled, key, parse_date, text, today_bangkok
 
 
 SUMMARY_COLUMNS = [
@@ -1963,6 +2087,69 @@ def available_report_years(*datasets: Iterable[Mapping] | pd.DataFrame | None) -
     return sorted(years, reverse=True)
 
 
+def _verified_reversal_transactions(rows: list[dict], invalid_transactions: set[str], warn) -> set[str]:
+    """Hide business activity only for complete, explicitly linked reversals.
+
+    The caller retains the complete ledger for stock-chain verification. A
+    cancellation is a correction, rather than a receipt followed by an issue;
+    its original activity and exact inverse therefore leave the business totals
+    together. OPENING checkpoints are never supplied to this helper.
+    """
+    by_transaction: dict[str, list[dict]] = {}
+    cancellation_ids: set[str] = set()
+    target_cancellations: dict[str, set[str]] = {}
+    for row in rows:
+        transaction_id = text(row.get("Transaction ID"))
+        if transaction_id:
+            by_transaction.setdefault(transaction_id, []).append(row)
+        if text(row.get("Movement Type")).upper().replace(" ", "_").startswith("CANCEL_"):
+            cancellation_ids.add(transaction_id)
+            target_id = text(row.get("Reverses Transaction ID"))
+            if target_id:
+                target_cancellations.setdefault(target_id, set()).add(transaction_id)
+
+    original_kinds = {"CANCEL_RECEIPT": {"RECEIPT"}, "CANCEL_ADJUST": {"ADJUST"},
+                      "CANCEL_PACK": {"PACK_CONSUME", "PACK_PRODUCE"}, "CANCEL_SHIP": {"SHIP"}}
+    verified: set[str] = set()
+    for cancellation_id in cancellation_ids:
+        compensations = by_transaction.get(cancellation_id, [])
+        targets = {text(row.get("Reverses Transaction ID")) for row in compensations}
+        kinds = {text(row.get("Movement Type")).upper().replace(" ", "_") for row in compensations}
+        target_id = next(iter(targets)) if len(targets) == 1 else ""
+        original = by_transaction.get(target_id, [])
+        valid = bool(cancellation_id and target_id and cancellation_id != target_id and original
+                     and len(kinds) == 1 and next(iter(kinds)) in original_kinds
+                     and len(target_cancellations.get(target_id, set())) == 1
+                     and cancellation_id not in invalid_transactions and target_id not in invalid_transactions)
+        if valid:
+            allowed = original_kinds[next(iter(kinds))]
+            valid = all(text(row.get("Movement Type")).upper().replace(" ", "_") in allowed
+                        and not text(row.get("Reverses Transaction ID")) for row in original)
+        balances: dict[tuple, Decimal] = {}
+        original_keys: set[tuple] = set()
+        compensation_keys: set[tuple] = set()
+        if valid:
+            for group, keys in ((original, original_keys), (compensations, compensation_keys)):
+                for row in group:
+                    identity = (text(row.get("Inventory ID")), _day(row.get("Movement Date")),
+                                _category(row.get("Category")), _source(row.get("Source")))
+                    amount = _number(row.get("Quantity Change"))
+                    if (not all(identity) or identity[-1] not in {"main", "packing_records"}
+                            or amount is None):
+                        valid = False
+                        break
+                    keys.add(identity)
+                    balances[identity] = balances.get(identity, ZERO) + amount
+                if not valid:
+                    break
+            valid = valid and original_keys == compensation_keys and all(amount == ZERO for amount in balances.values())
+        if valid:
+            verified.update((target_id, cancellation_id))
+        else:
+            warn("พบรายการยกเลิก Stock Movement ที่อ้างอิงหรือยอดคืนไม่ครบ จึงคงรายการเดิมในยอดรายงานให้ตรวจสอบ")
+    return verified
+
+
 def monthly_report(
     main_rows, packing_rows, shipped_rows, packing_log_rows, movement_rows,
     year: int, month: int,
@@ -1979,8 +2166,8 @@ def monthly_report(
     end = date(int(year) + 1, 1, 1) if month == 12 else date(int(year), int(month) + 1, 1)
     main = _rows(main_rows)
     packed = _rows(packing_rows)
-    shipped = _rows(shipped_rows)
-    packing_logs = _rows(packing_log_rows)
+    shipped = [row for row in _rows(shipped_rows) if not is_cancelled(row)]
+    packing_logs = [row for row in _rows(packing_log_rows) if not is_cancelled(row)]
     movements = _rows(movement_rows)
     warnings: list[str] = []
     uncertain: set[str] = set()
@@ -2000,26 +2187,37 @@ def monthly_report(
     seen: dict[str, tuple] = {}
     ledger_transactions: set[str] = set()
     created_ids: set[str] = set()
+    ledger_rows: list[dict] = []
+    invalid_transactions: set[str] = set()
     for row in movements:
+        tx_id = text(row.get("Transaction ID"))
         category = _category(row.get("Category"))
         quantity = _number(row.get("Quantity Change"))
         if not category:
+            invalid_transactions.add(tx_id)
+            invalid_transactions.add(text(row.get("Reverses Transaction ID")))
             warn("พบรายการ Stock Movement ที่ไม่ระบุประเภท WIP / FG")
             uncertain.update(CATEGORY_NAMES)
             unsafe_ledger.update(CATEGORY_NAMES)
             continue
         if quantity is None:
+            invalid_transactions.add(tx_id)
+            invalid_transactions.add(text(row.get("Reverses Transaction ID")))
             warn("พบจำนวนที่ไม่ถูกต้องใน Stock Movement กรุณาตรวจประวัติรายการ", category)
             unsafe_ledger.add(category)
             continue
         day = _day(row.get("Movement Date"))
         kind = text(row.get("Movement Type")).upper().replace(" ", "_")
         stock_id = text(row.get("Inventory ID"))
-        tx_id = text(row.get("Transaction ID"))
         event_id = text(row.get("Event ID"))
-        fingerprint = (day, category, quantity, kind, stock_id, tx_id)
+        fingerprint = (day, category, quantity, kind, stock_id, tx_id,
+                       _source(row.get("Source")), text(row.get("Reverses Transaction ID")))
         if event_id and event_id in seen:
             if seen[event_id] != fingerprint:
+                invalid_transactions.add(tx_id)
+                invalid_transactions.add(seen[event_id][5])
+                invalid_transactions.add(text(row.get("Reverses Transaction ID")))
+                invalid_transactions.add(seen[event_id][7])
                 warn("พบ Event ID ซ้ำแต่ข้อมูลต่างกัน ต้องตรวจ Stock Movement ก่อนใช้รายงาน", category)
                 unsafe_ledger.add(category)
             continue
@@ -2037,12 +2235,17 @@ def monthly_report(
                 opening[stock_id] = event
         else:
             ledger.append(event)
+            ledger_rows.append(row)
             if kind in {"RECEIPT", "PACK_PRODUCE"}:
                 created_ids.add(stock_id)
         if day is None:
+            invalid_transactions.add(tx_id)
+            invalid_transactions.add(text(row.get("Reverses Transaction ID")))
             warn("พบวันที่ไม่ถูกต้องใน Stock Movement", category)
             unsafe_ledger.add(category)
-    events.extend(ledger)
+    corrected_transactions = _verified_reversal_transactions(ledger_rows, invalid_transactions, warn)
+    business_ledger = [event for event in ledger if event.transaction_id not in corrected_transactions]
+    events.extend(business_ledger)
 
     # Every movement chain needs an opening or creation event. Without one,
     # remaining quantity cannot be treated as the pre-movement receipt.
@@ -2297,9 +2500,9 @@ def monthly_report(
                 # activity that day, so complete months start after that day.
                 if start > cutover:
                     values = [balance_at(start),
-                              float(sum((event.quantity for event in ledger if event.category == category
+                              float(sum((event.quantity for event in business_ledger if event.category == category
                                          and event.start is not None and start <= event.start < end and event.quantity > ZERO), ZERO)),
-                              float(sum((-event.quantity for event in ledger if event.category == category
+                              float(sum((-event.quantity for event in business_ledger if event.category == category
                                          and event.start is not None and start <= event.start < end and event.quantity < ZERO), ZERO)),
                               balance_at(end)]
                     uncertain_category = False
@@ -2341,10 +2544,777 @@ def monthly_report(
         "shipments": shipments, "daily": daily[["Date", "WIP", "FG"]], "warnings": warnings,
         "quality": {"status": status, "categories": category_quality, "ledger": bool(movements),
                     "legacy_rows": len(stocks), "ledger_events": len(ledger),
+                    "cancelled_ledger_events": len(ledger) - len(business_ledger),
                     "daily_complete": all(event.start == event.end and event.start is not None for event in events)},
         "years": available_report_years(main, packed, shipped, packing_logs, movements),
     }
 
+'''
+
+# Embedded application module: trading_cancellations.py
+_embedded_sources['trading_cancellations'] = '''"""Audited, fenced reversals of recorded inventory and planning transactions.
+
+Original rows and ledger events remain available. New transactions record an
+undo journal; older stock receipts/packing/shipments can use their immutable
+movement chain when it contains enough evidence to restore the quantities.
+"""
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime
+from decimal import Decimal
+import json
+
+from trading_core import (
+    MAIN_HEADERS, PACK_HEADERS, TRANSACTION_HEADERS, ValidationError, decimal_delta,
+    decimal_quantity, key, now_bangkok, parse_date, text,
+)
+from trading_transactions import (
+    JOURNAL_HEADERS, ROW_ID_HEADER, MOVEMENT_SHEET_NAME, TRANSACTION_SHEET_NAME,
+    _JOURNAL_SYSTEM_FIELDS, _cell_equal, _json, _movement, _movement_order,
+    _prepare_inventory, _record_item, get_transaction_result, run_fenced_mutation,
+)
+
+
+STOCK_KINDS = {"RECEIPT", "ADJUST", "PACK", "SHIP"}
+CANCEL_HEADERS = ["Transaction Status", "Cancelled By", "Cancelled At", "Cancel Reason"]
+ZERO = Decimal("0")
+
+
+def _cancelled(row):
+    return key(row.get("Transaction Status")) in {"cancelled", "canceled"}
+
+
+def cancellation_payload(target_transaction_id, reason):
+    return {"target_transaction_id": text(target_transaction_id), "reason": text(reason)}
+
+
+def get_cancellation_result(spreadsheet, cancellation_id, target_transaction_id, reason):
+    return get_transaction_result(spreadsheet, cancellation_id, "CANCEL", cancellation_payload(target_transaction_id, reason))
+
+
+def _decode(value, default=None):
+    try:
+        return json.loads(text(value)) if text(value) else default
+    except (TypeError, ValueError):
+        raise ValidationError("ประวัติธุรกรรมไม่สมบูรณ์ กรุณาตรวจ Inventory_Transactions ก่อนยกเลิก") from None
+
+
+def _stamp(value):
+    try:
+        return datetime.fromisoformat(text(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _identity(record):
+    if text(record.get(ROW_ID_HEADER)):
+        return (ROW_ID_HEADER, text(record[ROW_ID_HEADER]))
+    if text(record.get("Inventory ID")):
+        return ("Inventory ID", text(record["Inventory ID"]))
+    if text(record.get("Line ID")):
+        return ("Line ID", text(record.get("Request ID")), text(record["Line ID"]))
+    if text(record.get("Delivery ID")):
+        return ("Delivery ID", text(record["Delivery ID"]))
+    return None
+
+
+def _same_identity(row, identity):
+    if identity[0] == "Line ID":
+        return (text(row.get("Request ID")), text(row.get("Line ID"))) == identity[1:]
+    return text(row.get(identity[0])) == identity[1]
+
+
+def _business_guard(change, plan):
+    after = change["after"]
+    if "Inventory ID" in after:
+        owned = MAIN_HEADERS if "Category" in after else PACK_HEADERS
+        return [name for name in owned if name in after]
+    # Guard exactly the written cells and stable identity; unrelated formulas
+    # and user-defined columns may change independently of this operation.
+    return list(change.get("fields", []))
+
+
+def _locate(plan, change, used):
+    after = change["after"]
+    identity = _identity(after)
+    if identity is not None:
+        matches = [row for row in plan.records if _same_identity(row, identity)]
+        if len(matches) != 1:
+            raise ValidationError(f"รายการใน {plan.title} ถูกย้าย ลบ หรือมีรหัสซ้ำ กรุณาตรวจข้อมูลก่อนยกเลิก")
+        row = matches[0]
+    else:
+        fields = _business_guard(change, plan)
+        matches = [row for row in plan.records if (plan.title, row["Original_Row_Index"]) not in used
+                   and all(_cell_equal(name, row.get(name), after.get(name)) for name in fields)]
+        wanted_row = change.get("row")
+        exact = [row for row in matches if row["Original_Row_Index"] == wanted_row]
+        if len(matches) == 1:
+            row = matches[0]
+        elif change.get("legacy") and len(exact) == 1:
+            row = exact[0]
+        else:
+            raise ValidationError(f"ระบุแถวเดิมใน {plan.title} ไม่ได้อย่างแน่นอน กรุณาตรวจประวัติก่อนยกเลิก")
+    row_key = (plan.title, row["Original_Row_Index"])
+    if row_key in used:
+        raise ValidationError("ประวัติยกเลิกอ้างแถวเดิมซ้ำ กรุณาตรวจ Inventory_Transactions")
+    used.add(row_key)
+    if _cancelled(row):
+        raise ValidationError("รายการที่เกี่ยวข้องถูกยกเลิกโดยธุรกรรมอื่นแล้ว กรุณาตรวจประวัติ")
+    fields = _business_guard(change, plan)
+    if any(not _cell_equal(name, row.get(name), after.get(name)) for name in fields):
+        raise ValidationError(f"ข้อมูลใน {plan.title} เปลี่ยนหลังธุรกรรมนี้ กรุณายกเลิกรายการที่ทำภายหลังก่อน")
+    return row
+
+
+def _dependency_check(context, target, changes, stock_events):
+    target_id = text(target["Transaction ID"])
+    receipts = context.plans[TRANSACTION_SHEET_NAME].records
+    by_id = {text(row.get("Transaction ID")): row for row in receipts}
+    identities = {(change["sheet"], _identity(change["after"])) for change in changes
+                  if _identity(change["after"]) is not None}
+    request_ids = {text(change["after"].get("Request ID")) for change in changes
+                   if text(change["after"].get("Request ID"))}
+    for receipt in receipts:
+        other_id = text(receipt.get("Transaction ID"))
+        if other_id == target_id or _cancelled(receipt) or text(receipt.get("Kind")) == "CANCEL":
+            continue
+        if (_stamp(receipt.get("Created At")), int(receipt.get("Original_Row_Index", 0))) <= (_stamp(target.get("Created At")), int(target.get("Original_Row_Index", 0))):
+            continue
+        journal = _decode(receipt.get("Undo JSON"), {})
+        related = any((change.get("sheet"), _identity(change.get("after", {}))) in identities
+                      for change in journal.get("changes", []))
+        result = _decode(receipt.get("Result JSON"), {})
+        linked_requests = set(result.get("request_statuses", {})) if isinstance(result.get("request_statuses"), dict) else set()
+        if related or (request_ids and (text(result.get("request_id")) in request_ids or bool(request_ids & linked_requests))):
+            raise ValidationError(f"มีธุรกรรมภายหลังที่ใช้รายการเดียวกัน: {other_id} กรุณายกเลิกรายการนั้นก่อน")
+    if request_ids:
+        target_order = (_stamp(target.get("Created At")), int(target.get("Original_Row_Index", 0)))
+        for shipment in context.read_history("Shipped_Out_Log"):
+            if _cancelled(shipment) or text(shipment.get("Request ID")) not in request_ids:
+                continue
+            other_id = text(shipment.get("Transaction ID"))
+            if other_id == target_id or _cancelled(by_id.get(other_id, {})):
+                continue
+            receipt = by_id.get(other_id)
+            if receipt is not None:
+                later = (_stamp(receipt.get("Created At")), int(receipt.get("Original_Row_Index", 0))) > target_order
+            else:
+                moment = _stamp(shipment.get("Timestamp"))
+                if not moment:
+                    raise ValidationError("พบประวัติส่งที่ระบุลำดับธุรกรรมไม่ได้ กรุณาตรวจประวัติก่อนยกเลิกคำขอ")
+                later = moment >= target_order[0]
+            if later:
+                raise ValidationError(f"มีการส่งสินค้าภายหลังที่อ้าง Picking นี้: {other_id or 'ประวัติส่งเดิม'} กรุณายกเลิกการส่งนั้นก่อน")
+    # Ledger dependencies include source WIP consumed by a later packing batch,
+    # which does not appear in that batch's result.inventory_ids.
+    last_target = {}
+    for event in stock_events:
+        inventory_id = text(event.get("Inventory ID"))
+        last_target[inventory_id] = max(last_target.get(inventory_id, (-float("inf"), 0)), _movement_order(event))
+    if last_target:
+        movements = context.plans[MOVEMENT_SHEET_NAME].records
+        for event in movements:
+            inventory_id = text(event.get("Inventory ID"))
+            other_id = text(event.get("Transaction ID"))
+            kind = text(event.get("Movement Type")).upper()
+            if inventory_id not in last_target or other_id == target_id or kind == "OPENING" or kind.startswith("CANCEL_"):
+                continue
+            if _cancelled(by_id.get(other_id, {})):
+                continue
+            if _movement_order(event) > last_target[inventory_id]:
+                raise ValidationError(f"ล็อตนี้มีธุรกรรมภายหลัง: {other_id or kind} กรุณายกเลิกรายการนั้นก่อน")
+
+
+def _legacy_change(plan, row, *, before=None, fields=None, append=False):
+    after = {name: value for name, value in row.items() if name != "Original_Row_Index"}
+    return {"sheet": plan.title, "sheet_id": plan.id, "row": row["Original_Row_Index"], "legacy": True,
+            "append": append, "before": before, "after": after,
+            "fields": fields if fields is not None else [name for name in after if name not in _JOURNAL_SYSTEM_FIELDS]}
+
+
+def _legacy_changes(context, target, plans, lookup, events):
+    kind = text(target.get("Kind"))
+    target_id = text(target["Transaction ID"])
+    if kind not in {"RECEIPT", "PACK", "SHIP", "PICKING_CREATE"}:
+        raise ValidationError("ธุรกรรมเก่านี้ไม่มีข้อมูลก่อนแก้ไข จึงย้อนคืนอย่างปลอดภัยไม่ได้ รองรับยกเลิกการแก้ไขที่บันทึกหลังอัปเดตรุ่นนี้")
+    changes = []
+    if kind == "PICKING_CREATE":
+        result = _decode(target.get("Result JSON"), {})
+        request_id = text(result.get("request_id"))
+        plan = context.worksheet_plan("Picking_Requests")
+        rows = [row for row in plan.records if text(row.get("Request ID")) == request_id and not _cancelled(row)]
+        if not request_id or not rows or any(decimal_quantity(row.get("Shipped Volume") or 0) for row in rows):
+            raise ValidationError("Picking Request เก่านี้มีการส่งหรือไม่พบข้อมูลเดิม กรุณาตรวจประวัติก่อนยกเลิก")
+        return [_legacy_change(plan, row, append=True) for row in rows]
+    if not events:
+        raise ValidationError("ไม่พบ Stock Movement ที่ยืนยันธุรกรรมเก่านี้ จึงไม่สามารถคืนยอดโดยคาดเดาได้")
+    totals = {}
+    for event in events:
+        inventory_id = text(event.get("Inventory ID"))
+        totals[inventory_id] = totals.get(inventory_id, ZERO) + decimal_delta(event.get("Quantity Change"))
+    for inventory_id, delta in totals.items():
+        item = lookup.get(inventory_id)
+        if item is None:
+            raise ValidationError("ไม่พบล็อตเดิมที่อ้างในประวัติ กรุณาตรวจสต็อกก่อนยกเลิก")
+        plan = plans[item["source"]]
+        row = next(row for row in plan.records if row["Original_Row_Index"] == item["row_number"])
+        created = text(row.get("Created Transaction ID")) == target_id
+        if created:
+            effective = ZERO if key(row.get("Status")) == "delivered" else item["quantity"]
+            if effective != delta:
+                raise ValidationError("ยอดสินค้าที่สร้างจากธุรกรรมเก่าเปลี่ยนไปแล้ว กรุณายกเลิกรายการภายหลังก่อน")
+            changes.append(_legacy_change(plan, row, append=True))
+        else:
+            before = deepcopy(row)
+            before["Quantity"] = item["quantity"] - delta
+            fields = ["Quantity"]
+            if item["source"] == "main":
+                if kind == "PACK":
+                    before["Status"] = "Pending Packing"
+                elif key(row.get("Status")) == "delivered":
+                    before["Status"] = "Pending Packing" if item["category"] == "WIP" else "Trading Goods Received to Stock"
+                fields.append("Status")
+            changes.append(_legacy_change(plan, row, before=before, fields=fields))
+    log_title = "Packing_Log" if kind == "PACK" else "Shipped_Out_Log" if kind == "SHIP" else None
+    if log_title:
+        log_plan = context.worksheet_plan(log_title)
+        log_rows = [row for row in log_plan.records if text(row.get("Transaction ID")) == target_id and not _cancelled(row)]
+        if not log_rows:
+            raise ValidationError("ไม่พบประวัติแพ็ก/ส่งที่เชื่อมกับธุรกรรมเก่านี้")
+        if kind == "SHIP" and sum((decimal_quantity(row.get("Shipped Qty")) for row in log_rows), ZERO) != -sum(totals.values(), ZERO):
+            raise ValidationError("ยอดส่งในประวัติไม่ตรงกับ Stock Movement กรุณาตรวจข้อมูลก่อนยกเลิก")
+        changes.extend(_legacy_change(log_plan, row, append=True) for row in log_rows)
+        if kind == "SHIP":
+            _legacy_request_changes(context, changes, log_rows)
+    return changes
+
+
+def _legacy_request_changes(context, changes, log_rows):
+    shipped = {}
+    for row in log_rows:
+        identity = (text(row.get("Request ID")), text(row.get("Line ID")))
+        if all(identity):
+            shipped[identity] = shipped.get(identity, ZERO) + decimal_quantity(row.get("Shipped Qty"))
+    if not shipped:
+        return
+    plan = context.worksheet_plan("Picking_Requests")
+    request_ids = {identity[0] for identity in shipped}
+    for request_id in request_ids:
+        rows = [row for row in plan.records if text(row.get("Request ID")) == request_id and not _cancelled(row)]
+        if not rows or any(key(row.get("Request Status")) == "cancelled" for row in rows):
+            raise ValidationError("Picking Request ถูกยกเลิกหรือเปลี่ยนไปแล้ว กรุณาย้อนรายการนั้นก่อนยกเลิกการส่ง")
+        restored = {}
+        for row in rows:
+            identity = (request_id, text(row.get("Line ID")))
+            quantity = decimal_quantity(row.get("Shipped Volume") or 0) - shipped.get(identity, ZERO)
+            if quantity < 0:
+                raise ValidationError("ยอดส่งสะสมของ Picking ไม่ตรงกับประวัติ กรุณาตรวจข้อมูลก่อนยกเลิก")
+            restored[identity[1]] = quantity
+        state = "Completed" if all(restored[text(row.get("Line ID"))] >= decimal_quantity(row.get("Volume"), positive=True) for row in rows) else "Partial" if any(restored.values()) else "Open"
+        for row in rows:
+            before = deepcopy(row)
+            before.update({"Shipped Volume": restored[text(row.get("Line ID"))], "Request Status": state})
+            changes.append(_legacy_change(plan, row, before=before, fields=["Shipped Volume", "Request Status"]))
+
+
+def _restore_value(header, value):
+    if (header in {"Quantity", "Volume", "Shipped Volume", "Waste Qty", "Shipped Qty", "Total Packed Qty"}
+            or "volume" in key(header)) and text(value):
+        return decimal_quantity(value)
+    return value
+
+
+def _validate_restored_requests(context):
+    """Validate the queued final state against active shipment history.
+
+    A historical receipt can lack its before-image/dependency journal. Demand
+    still cannot disappear or fall below already fulfilled quantities.
+    """
+    plan = context.plans.get("Picking_Requests")
+    touched = [entry for (title, _), entry in context.journal_updates.items() if title == "Picking_Requests"]
+    if plan is None or not touched:
+        return
+    affected = {text(entry[side].get("Request ID")) for entry in touched for side in ("before", "after")
+                if text(entry[side].get("Request ID"))}
+    if not affected:
+        return
+    final = {}
+    for row in plan.records:
+        queued = context.journal_updates.get((plan.title, int(row["Original_Row_Index"])))
+        effective = queued["after"] if queued is not None else row
+        identity = (text(effective.get("Request ID")), text(effective.get("Line ID")))
+        if identity[0] not in affected or not all(identity) or _cancelled(effective):
+            continue
+        if identity in final:
+            raise ValidationError("Picking Request มีรหัสซ้ำ จึงไม่สามารถคืนข้อมูลได้")
+        final[identity] = effective
+    shipped = {}
+    logs = context.read_history("Shipped_Out_Log")
+    for row in logs:
+        queued = context.journal_updates.get(("Shipped_Out_Log", int(row["Original_Row_Index"])))
+        effective = queued["after"] if queued is not None else row
+        identity = (text(effective.get("Request ID")), text(effective.get("Line ID")))
+        if identity[0] not in affected or not all(identity) or _cancelled(effective):
+            continue
+        shipped[identity] = shipped.get(identity, ZERO) + decimal_quantity(effective.get("Shipped Qty"))
+    for identity, amount in shipped.items():
+        if amount > 0 and identity not in final:
+            raise ValidationError("ยังมีประวัติส่งของบรรทัดที่จะยกเลิก กรุณายกเลิกการส่งก่อน")
+    for identity, row in final.items():
+        fulfilled = max(decimal_quantity(row.get("Shipped Volume") or 0), shipped.get(identity, ZERO))
+        if fulfilled > decimal_quantity(row.get("Volume"), positive=True):
+            raise ValidationError("จำนวนที่คืนจะน้อยกว่ายอดส่งจริง กรุณายกเลิกธุรกรรมการส่งก่อน")
+
+
+def cancel_transaction(spreadsheet, cancellation_id, target_transaction_id, reason):
+    """Reverse one transaction atomically, after its dependants are reversed."""
+    payload = cancellation_payload(target_transaction_id, reason)
+    target_id = payload["target_transaction_id"]
+    if not target_id:
+        raise ValidationError("กรุณาเลือกธุรกรรมที่ต้องการยกเลิก")
+    if not payload["reason"]:
+        raise ValidationError("กรุณาระบุเหตุผลการยกเลิก")
+    if len(payload["reason"]) > 2000:
+        raise ValidationError("เหตุผลการยกเลิกยาวเกิน 2,000 ตัวอักษร")
+    if text(cancellation_id) == target_id:
+        raise ValidationError("หมายเลขยกเลิกต้องแตกต่างจากธุรกรรมเดิม")
+
+    def build(context):
+        receipts = context.worksheet_plan(TRANSACTION_SHEET_NAME, TRANSACTION_HEADERS, JOURNAL_HEADERS)
+        found = [row for row in receipts.records if text(row.get("Transaction ID")) == target_id]
+        if len(found) != 1:
+            raise ValidationError("ไม่พบธุรกรรมเดิมหรือพบหมายเลขซ้ำ กรุณาตรวจประวัติ")
+        target = found[0]
+        kind = text(target.get("Kind"))
+        if kind == "CANCEL":
+            raise ValidationError("ไม่สามารถยกเลิกรายการย้อนธุรกรรม กรุณาสร้างธุรกรรมใหม่ให้ถูกต้อง")
+        if _cancelled(target):
+            return {"target_transaction_id": target_id, "target_kind": kind, "already_cancelled": True,
+                    "cancellation_id": text(target.get("Cancelled By")), "line_count": 0}
+        journal = _decode(target.get("Undo JSON"), {})
+        if journal and journal.get("version") != 1:
+            raise ValidationError("รูปแบบประวัติยกเลิกไม่รองรับ กรุณาอัปเดตแอป")
+        changes = deepcopy(journal.get("changes", []))
+        plans, lookup, movement_plan, events = {}, {}, None, []
+        if kind in STOCK_KINDS:
+            plans, _, lookup, movement_plan, _ = _prepare_inventory(context)
+            events = [row for row in movement_plan.records if text(row.get("Transaction ID")) == target_id
+                      and text(row.get("Movement Type")).upper() != "OPENING"]
+            if not events:
+                raise ValidationError("ไม่พบ Stock Movement เดิม จึงไม่สามารถคืนยอดอย่างปลอดภัยได้")
+        if not journal:
+            changes = _legacy_changes(context, target, plans, lookup, events)
+        if not changes and not journal:
+            raise ValidationError("ธุรกรรมนี้ไม่มีข้อมูลเปลี่ยนแปลงที่ย้อนคืนได้")
+        _dependency_check(context, target, changes, events)
+        used, restored_rows = set(), {}
+        stamp = now_bangkok().isoformat()
+        cancel_meta = {"Transaction Status": "Cancelled", "Cancelled By": text(cancellation_id),
+                       "Cancelled At": stamp, "Cancel Reason": payload["reason"]}
+        for change in changes:
+            plan = context.worksheet_plan(change["sheet"])
+            row = _locate(plan, change, used)
+            is_stock = plan.title == (context.first_worksheet.title if context.first_worksheet else None) or plan.title == "Packing_Records"
+            if change.get("append"):
+                updates = dict(cancel_meta)
+                if is_stock:
+                    updates.update({"Quantity": ZERO, "Status": "Cancelled", "Last Transaction ID": text(cancellation_id)})
+                elif plan.title == "Picking_Requests":
+                    updates["Request Status"] = "Cancelled"
+            else:
+                before = change.get("before") or {}
+                updates = {name: _restore_value(name, before.get(name)) for name in change.get("fields", [])
+                           if name not in _JOURNAL_SYSTEM_FIELDS}
+                if is_stock:
+                    updates["Last Transaction ID"] = text(cancellation_id)
+            context.update(plan, row["Original_Row_Index"], updates)
+            if is_stock:
+                restored = dict(row)
+                restored.update(updates)
+                inventory_id = text(row.get("Inventory ID")) or text(change["after"].get("Inventory ID"))
+                restored_rows[inventory_id] = ("packing_records" if plan.title == "Packing_Records" else "main", restored)
+        _validate_restored_requests(context)
+        if movement_plan is not None:
+            grouped = {}
+            business_dates = {}
+            for event in events:
+                inventory_id = text(event.get("Inventory ID"))
+                grouped[inventory_id] = grouped.get(inventory_id, ZERO) + decimal_delta(event.get("Quantity Change"))
+                business_dates.setdefault(inventory_id, set()).add(parse_date(event.get("Movement Date")))
+            if any(len(dates) != 1 for dates in business_dates.values()):
+                raise ValidationError("ธุรกรรมเดิมมีหลายวันทำรายการในล็อตเดียว จึงไม่สามารถย้อนวันที่โดยคาดเดาได้ กรุณาตรวจ Stock Movement")
+            reversed_movements = []
+            for index, (inventory_id, delta) in enumerate(grouped.items(), start=1):
+                item = lookup.get(inventory_id)
+                restored = restored_rows.get(inventory_id)
+                if restored is None and delta == 0 and item is not None:
+                    # Saving identical registration data can create a zero
+                    # movement without any business-cell change in its journal.
+                    restored = (item["source"], item["record"])
+                    restored_rows[inventory_id] = restored
+                if item is None or restored is None:
+                    raise ValidationError("ประวัติยกเลิกไม่ครอบคลุมล็อตใน Stock Movement กรุณาตรวจข้อมูล")
+                source, record = restored
+                balance = ZERO if key(record.get("Status")) == "delivered" else decimal_quantity(record.get("Quantity"))
+                old_balance = ZERO if key(item["record"].get("Status")) == "delivered" else item["quantity"]
+                if balance != old_balance - delta:
+                    raise ValidationError("ยอดคืนไม่ตรงกับ Stock Movement เดิม จึงหยุดยกเลิกเพื่อป้องกันสต็อกผิด")
+                result_item = _record_item(inventory_id, source, record)
+                reversal = _movement(context, result_item, "CANCEL_" + kind, -delta, balance,
+                                     next(iter(business_dates[inventory_id])), f"cancel:{index}",
+                                     f"ยกเลิก {target_id}: {payload['reason']}")
+                reversal["Reverses Transaction ID"] = target_id
+                reversed_movements.append(reversal)
+            context.append(movement_plan, reversed_movements)
+        context.update(receipts, target["Original_Row_Index"], cancel_meta)
+        return {"target_transaction_id": target_id, "target_kind": kind, "cancellation_id": text(cancellation_id),
+                "already_cancelled": False, "line_count": len(changes), "legacy_derived": not bool(journal),
+                "inventory_ids": list(restored_rows), "cancelled_at": stamp}
+
+    return run_fenced_mutation(spreadsheet, cancellation_id, "CANCEL", payload, build)
+'''
+
+# Embedded application module: trading_cancellation_ui.py
+_embedded_sources['trading_cancellation_ui'] = '''"""A shared, explicit cancellation flow for saved portal transactions."""
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+import json
+from uuid import uuid4
+
+import streamlit as st
+
+import trading_core as core
+from trading_sheets import get_display_records, invalidate_display_cache, read_error_message
+
+
+KIND_LABELS = {
+    "RECEIPT": "รับเข้าสินค้า",
+    "ADJUST": "แก้ไขทะเบียน",
+    "PACK": "แพ็กสินค้า",
+    "SHIP": "ส่งออกสินค้า",
+    "PICKING_CREATE": "สร้าง Picking Request",
+    "PICKING_EDIT": "แก้ไข Picking Request",
+    "PICKING_CANCEL": "ยกเลิก Picking Request",
+    "DELIVERY_UPDATE": "แก้ไขแผนจัดส่ง / Permit",
+}
+
+_PREVIEW_LABELS = {
+    "cultivarname": "สายพันธุ์", "cultivar": "สายพันธุ์", "cultivarproduct": "สายพันธุ์ / สินค้า",
+    "exportname": "ชื่อส่งออก", "grade": "เกรด", "เกรด": "เกรด",
+    "quantity": "จำนวน (g)", "volume": "จำนวนส่ง (g)", "shippedqty": "จำนวนส่ง (g)",
+    "shippedvolume": "ยอดส่งสะสม (g)", "totalpackedqty": "ผลผลิต FG (g)", "wasteqty": "ของเสีย (g)",
+    "expectedshippingdate": "กำหนดส่ง", "shipmentdate": "วันจัดส่ง", "deliverydate": "กำหนดส่ง",
+    "packingdate": "วันที่แพ็ก", "receivedate": "วันที่รับเข้า",
+    "permitno": "Permit No.", "consignee": "Consignee", "trueconsignee": "True Consignee",
+    "projectowner": "Project Owner", "type": "ประเภทผลิตภัณฑ์", "producttype": "ประเภทผลิตภัณฑ์",
+    "suppliername": "ผู้จัดหา", "supplier": "ผู้จัดหา", "supplierlotno": "Supplier Lot No.",
+    "thaisticklotno": "THAI STICK Lot No.", "generatedfglotno": "FG Lot No.", "sourcewiplot": "ล็อต WIP ต้นทาง",
+    "requeststatus": "สถานะคำขอ", "status": "สถานะสินค้า", "category": "ประเภทสต็อก",
+    "note": "หมายเหตุ", "remarkqty": "หมายเหตุจำนวน", "inspectionreq": "คำขอตรวจสินค้า",
+    "irreq": "คำขอ IR", "shippingreason": "เหตุผลการส่งสินค้า", "clientลูกค้า": "ลูกค้า",
+}
+_PREVIEW_HIDDEN = {
+    "inventoryid", "transactionrowid", "transactionid", "requestid", "lineid", "deliveryid", "batchid",
+    "originalrowindex", "createdtransactionid", "lasttransactionid", "createdat", "timestamp",
+    "payloadhash", "resultjson", "undojson", "transactionstatus", "cancelledby", "cancelledat", "cancelreason",
+    "initialqty", "producedqty", "sourcedetails", "requiredcategory",
+}
+_PREVIEW_NUMBERS = {"quantity", "volume", "shippedqty", "shippedvolume", "totalpackedqty", "wasteqty"}
+
+
+def _field_key(value):
+    return "".join(character for character in core.key(value) if character.isalnum())
+
+
+def _preview_value(field, value):
+    raw = core.text(value)
+    if not raw:
+        return "—"
+    normalized = _field_key(field)
+    if normalized in _PREVIEW_NUMBERS:
+        try:
+            amount = Decimal(raw.replace(",", ""))
+            if amount.is_finite():
+                return f"{amount:,.0f}"
+        except (InvalidOperation, TypeError, ValueError):
+            pass
+    if "date" in normalized:
+        try:
+            date_value = core.parse_date(raw, allow_pending=True)
+            if date_value is not None:
+                return date_value.strftime("%d/%m/%Y")
+        except (ValueError, TypeError):
+            pass
+    return raw
+
+
+def _journal_details(receipt):
+    raw = core.text(receipt.get("Undo JSON"))
+    if not raw:
+        st.caption("รายการเก่า ระบบจะตรวจประวัติที่มีอยู่ก่อนยกเลิก")
+        return
+    try:
+        journal = json.loads(raw)
+    except (ValueError, TypeError):
+        journal = None
+    if not isinstance(journal, dict) or journal.get("version") != 1 or not isinstance(journal.get("changes"), list):
+        st.caption("ยังแสดงข้อมูลก่อนและหลังไม่ได้ เนื่องจากรายละเอียดประวัติไม่สมบูรณ์ ระบบจะตรวจสอบอีกครั้งก่อนยกเลิก")
+        return
+    preview, truncated = [], False
+    # Each row contains two compared values, so fifty rows cap the preview at
+    # one hundred before/after cells without loading another worksheet.
+    for index, change in enumerate(journal["changes"], start=1):
+        if not isinstance(change, dict) or not isinstance(change.get("after"), dict):
+            continue
+        before, after = change.get("before") or {}, change["after"]
+        if not isinstance(before, dict) or not isinstance(change.get("fields"), list):
+            continue
+        combined = dict(before, **after)
+        names = []
+        for aliases in [("Cultivar Name", "Cultivar", "Cultivar / Product", "Export Name"),
+                        ("Generated FG Lot No.", "THAI STICK Lot. No.", "Lot No.", "Source WIP Lot"),
+                        ("Request ID",)]:
+            name = next((core.text(combined.get(field)) for field in aliases if core.text(combined.get(field))), "")
+            if name and name not in names:
+                names.append(name)
+        row_label = " · ".join(names) or f"รายการที่ {index}"
+        if change.get("append"):
+            row_label += " · เพิ่มรายการใหม่"
+        for field in dict.fromkeys(field for field in change["fields"] if isinstance(field, str)):
+            normalized = _field_key(field)
+            if normalized in _PREVIEW_HIDDEN:
+                continue
+            if len(preview) == 50:
+                truncated = True
+                break
+            preview.append({"รายการ": row_label, "ข้อมูล": _PREVIEW_LABELS.get(normalized, field),
+                            "ก่อนบันทึก": _preview_value(field, before.get(field)),
+                            "หลังบันทึก": _preview_value(field, after.get(field))})
+        if truncated:
+            break
+    if preview:
+        st.markdown("**ข้อมูลก่อนและหลังธุรกรรมที่เลือก**")
+        st.dataframe(preview, hide_index=True, width="stretch")
+        if truncated:
+            st.caption("แสดงรายละเอียด 50 ข้อมูลแรกของธุรกรรมนี้")
+    else:
+        st.caption("ไม่มีข้อมูลที่เปลี่ยนแปลงสำหรับแสดงรายละเอียด")
+
+
+def _result(row):
+    try:
+        value = json.loads(core.text(row.get("Result JSON")) or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _time_label(value):
+    raw = core.text(value)
+    try:
+        moment = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if moment.tzinfo is not None:
+            moment = moment.astimezone(core.BANGKOK)
+        return moment.strftime("%d/%m/%Y %H:%M")
+    except (TypeError, ValueError):
+        return raw or "ไม่ระบุเวลา"
+
+
+def _quantity_label(value):
+    if value is None or not core.text(value):
+        return ""
+    try:
+        quantity = Decimal(core.text(value).replace(",", ""))
+    except (InvalidOperation, TypeError, ValueError):
+        return ""
+    return f"{quantity:,.0f} g" if quantity.is_finite() else ""
+
+
+def _label(row):
+    result = _result(row)
+    details = [_time_label(row.get("Created At")), KIND_LABELS.get(core.text(row.get("Kind")), core.text(row.get("Kind")))]
+    quantity = _quantity_label(result.get("total_quantity"))
+    if quantity:
+        details.append(quantity)
+    if core.text(result.get("request_id")):
+        details.append(core.text(result["request_id"]))
+    transaction_id = core.text(row.get("Transaction ID"))
+    details.append("…" + transaction_id[-12:] if len(transaction_id) > 16 else transaction_id)
+    return " · ".join(details)
+
+
+def _stock_details(sh, result):
+    identifiers = result.get("inventory_ids", [])
+    if not isinstance(identifiers, list) or not identifiers:
+        return
+    wanted = {core.text(value) for value in identifiers}
+    try:
+        stock = get_display_records(sh) + get_display_records(sh, "Packing_Records")
+    except Exception as error:
+        st.caption(f"ยังแสดงรายละเอียดล็อตไม่ได้: {read_error_message(error)}")
+        return
+    details = [
+        {"สายพันธุ์": core.text(row.get("Cultivar Name") or row.get("Export Name")),
+         "เกรด": core.text(row.get("Grade")),
+         "ล็อต": core.text(row.get("Generated FG Lot No.") or row.get("THAI STICK Lot. No.")),
+         "รหัสสต็อก": core.text(row.get("Inventory ID"))}
+        for row in stock if core.text(row.get("Inventory ID")) in wanted
+    ]
+    if details:
+        st.dataframe(details, hide_index=True, width="stretch")
+    else:
+        st.caption("อ้างอิงสต็อก: " + ", ".join(sorted(wanted)))
+
+
+def _state(sh):
+    state_key = f"transaction_cancellation_{sh.id}_{id(sh)}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = {"drafts": {}, "pending": None, "flash": None}
+    return st.session_state[state_key]
+
+
+def _finish(sh, state, attempt, result):
+    state["pending"] = None
+    state["drafts"].pop(attempt["target_transaction_id"], None)
+    state["flash"] = (
+        "รายการนี้ถูกยกเลิกแล้ว ระบบไม่คืนยอดซ้ำ"
+        if result.get("already_cancelled") else
+        "ยืนยันการยกเลิกรายการแล้ว ระบบปรับยอดและเก็บประวัติเรียบร้อย"
+    )
+    invalidate_display_cache(sh)
+    st.rerun()
+
+
+def _execute(sh, state, attempt):
+    # Import lazily so displaying history never initializes a second writer.
+    from trading_cancellations import cancel_transaction
+
+    try:
+        result = cancel_transaction(sh, attempt["cancellation_id"], attempt["target_transaction_id"], attempt["reason"])
+    except core.ValidationError as error:
+        # Business validation rejects the attempt before any new commit.
+        state["pending"] = None
+        st.error(f"ยังยกเลิกรายการนี้ไม่ได้: {read_error_message(error)}")
+        return False
+    except Exception as error:
+        st.warning("ยังยืนยันผลการยกเลิกไม่ได้ ระบบเก็บรายการและเหตุผลเดิมไว้เพื่อป้องกันคืนยอดซ้ำ")
+        st.caption(read_error_message(error))
+        return False
+    _finish(sh, state, attempt, result)
+    return True
+
+
+def _recover(sh, state, prefix, writable):
+    attempt = state["pending"]
+    st.warning("มีรายการยกเลิกที่ยังต้องตรวจสอบผล กรุณายืนยันผลรายการเดิมก่อนเลือกรายการใหม่")
+    st.text("รหัสรายการ: " + attempt["target_transaction_id"])
+    st.text("เหตุผล: " + attempt["reason"])
+    st.caption("การลองซ้ำใช้หมายเลขและข้อมูลเดิม ระบบจะตรวจผลก่อนคืนยอด")
+    check, retry = st.columns(2)
+    with check:
+        if st.button("ตรวจสอบผลการยกเลิก", key=f"{prefix}_check", width="stretch"):
+            from trading_cancellations import get_cancellation_result
+            try:
+                result = get_cancellation_result(sh, attempt["cancellation_id"], attempt["target_transaction_id"], attempt["reason"])
+            except Exception as error:
+                st.error(f"ยังตรวจสอบผลไม่ได้: {read_error_message(error)}")
+            else:
+                if result is not None:
+                    _finish(sh, state, attempt, result)
+                else:
+                    st.info("ยังไม่พบผลยืนยันการยกเลิก สามารถลองรายการเดิมอีกครั้งได้")
+    with retry:
+        if st.button("ลองยกเลิกรายการเดิมอีกครั้ง", key=f"{prefix}_retry", disabled=not writable, width="stretch"):
+            _execute(sh, state, attempt)
+
+
+def _history(rows, prefix):
+    cancelled = [row for row in rows if core.is_cancelled(row)]
+    if cancelled and st.checkbox("แสดงประวัติรายการที่ยกเลิกแล้ว", key=f"{prefix}_history"):
+        st.dataframe([
+            {"วันที่ทำรายการ": _time_label(row.get("Created At")),
+             "ประเภท": KIND_LABELS.get(core.text(row.get("Kind")), core.text(row.get("Kind"))),
+             "รหัสรายการ": core.text(row.get("Transaction ID")),
+             "วันที่ยกเลิก": _time_label(row.get("Cancelled At")),
+             "เหตุผล": core.text(row.get("Cancel Reason"))}
+            for row in cancelled
+        ], hide_index=True, width="stretch")
+
+
+def render_cancellation_panel(sh, kinds=None, key_prefix="transaction_cancel"):
+    """Render cancellation tools without writing until the explicit button.
+
+    A pending attempt is workbook-wide, so changing modules cannot discard its
+    frozen transaction ID or reason after an uncertain transport response.
+    """
+    state = _state(sh)
+    if state.get("flash"):
+        st.success(state.pop("flash"))
+    writable = bool(st.session_state.get("portal_can_write", True))
+    allowed = {kinds} if isinstance(kinds, str) else set(kinds) if kinds is not None else set(KIND_LABELS)
+    allowed = {core.text(kind).upper() for kind in allowed}
+    with st.expander("↩️ ยกเลิกธุรกรรมที่บันทึกแล้ว", expanded=bool(state["pending"])):
+        st.caption("เลือกธุรกรรมที่ใส่ข้อมูลผิด ระบบจะตรวจและย้อนผลของรายการพร้อมเก็บประวัติ หากมีรายการนำไปใช้ต่อ ให้ยกเลิกรายการหลังสุดก่อน")
+        if not writable:
+            st.info("โหมดอ่านอย่างเดียว สามารถตรวจสอบผลและดูประวัติได้")
+        if state["pending"]:
+            _recover(sh, state, key_prefix, writable)
+            return
+        try:
+            rows = [row for row in get_display_records(sh, "Inventory_Transactions")
+                    if core.text(row.get("Kind")).upper() in allowed and core.text(row.get("Transaction ID"))]
+        except Exception as error:
+            st.error(f"โหลดรายการธุรกรรมไม่สำเร็จ: {read_error_message(error)}")
+            return
+        rows.sort(key=lambda row: (core.text(row.get("Created At")), core.text(row.get("Transaction ID"))), reverse=True)
+        active = [row for row in rows if not core.is_cancelled(row)]
+        by_id = {core.text(row["Transaction ID"]): row for row in active}
+        if len(by_id) != len(active):
+            st.error("พบรหัสธุรกรรมซ้ำ กรุณาตรวจประวัติก่อนยกเลิก")
+            return
+        if not active:
+            st.caption("ยังไม่มีธุรกรรมที่ยกเลิกได้ในส่วนนี้")
+            _history(rows, key_prefix)
+            return
+        options = list(by_id)
+        select_key = f"{key_prefix}_target"
+        if select_key in st.session_state and st.session_state[select_key] not in by_id:
+            del st.session_state[select_key]
+        selected = st.selectbox("เลือกรายการที่ต้องการยกเลิก", options, format_func=lambda value: _label(by_id[value]), key=select_key)
+        receipt = by_id[selected]
+        result = _result(receipt)
+        st.text("รหัสรายการ: " + selected)
+        details = []
+        for field, label in [("total_quantity", "จำนวน"), ("withdrawn_quantity", "ยอดเบิก"), ("waste_quantity", "ของเสีย")]:
+            quantity = _quantity_label(result.get(field))
+            if quantity:
+                details.append(f"{label} {quantity}")
+        if details:
+            st.caption(" · ".join(details))
+        if core.text(result.get("request_id")):
+            st.text("Picking Request: " + core.text(result["request_id"]))
+        _stock_details(sh, result)
+        _journal_details(receipt)
+        draft = state["drafts"].setdefault(selected, {"reason": ""})
+        # Distinct per-target widget keys prevent a reason/confirmation leaking
+        # from the previous selected transaction into another cancellation.
+        suffix = selected.encode().hex()
+        reason_key = f"{key_prefix}_{suffix}_reason"
+        if reason_key not in st.session_state:
+            st.session_state[reason_key] = draft["reason"]
+        reason = st.text_area("เหตุผลที่ยกเลิก", key=reason_key, placeholder="เช่น กรอกจำนวนผิด หรือเลือกล็อตผิด", disabled=not writable)
+        draft["reason"] = reason
+        confirmed = st.checkbox("ตรวจสอบรายการแล้ว และยืนยันให้ระบบย้อนผลของธุรกรรมนี้", key=f"{key_prefix}_{suffix}_confirm", disabled=not writable)
+        if st.button("ยืนยันยกเลิกธุรกรรม", key=f"{key_prefix}_submit", type="primary",
+                     disabled=not writable or not core.text(reason) or not confirmed, width="stretch"):
+            attempt = {"cancellation_id": "CANCEL-" + uuid4().hex,
+                       "target_transaction_id": selected, "reason": core.text(reason)}
+            state["pending"] = attempt
+            _execute(sh, state, attempt)
+        _history(rows, key_prefix)
 '''
 
 # Embedded application module: trading_workflows_ui.py
@@ -2362,7 +3332,7 @@ from uuid import uuid4
 import pandas as pd
 import streamlit as st
 
-from trading_core import ValidationError, key, parse_date, text, today_bangkok
+from trading_core import ValidationError, is_cancelled, key, parse_date, text, today_bangkok
 from trading_reports import monthly_report
 from trading_transactions import (
     get_transaction_result, pack_inventory, ship_inventory,
@@ -2469,7 +3439,10 @@ def _finish_transaction(sh, kind, result):
     quantity = result.get("total_quantity")
     label = "การแพ็ก" if kind == "packing" else "การส่งสินค้า"
     amount = f" · {_fmt(quantity)} g" if quantity is not None else ""
-    st.session_state[f"workflow_{kind}_flash"] = f"ยืนยันผลบันทึก{label}แล้ว{amount}"
+    st.session_state[f"workflow_{kind}_flash"] = (
+        "ธุรกรรมเดิมถูกยกเลิกแล้ว กรุณาเริ่มรายการใหม่หากต้องการบันทึกอีกครั้ง"
+        if result.get("transaction_cancelled") else f"ยืนยันผลบันทึก{label}แล้ว{amount}"
+    )
     _reset(kind)
     st.rerun()
 
@@ -2611,6 +3584,9 @@ def render_numeric_dataframe(data, *, column_config=None, **kwargs):
     """Format numeric cells only; retain numeric sorting and original precision."""
     frame = data if isinstance(data, pd.DataFrame) else data.data
     config = dict(column_config or {})
+    for internal in ("Transaction Row ID", "Undo JSON"):
+        if internal in frame:
+            config[internal] = None
     for column in frame:
         if not pd.api.types.is_numeric_dtype(frame[column]) or pd.api.types.is_bool_dtype(frame[column]):
             continue
@@ -2645,6 +3621,8 @@ def fg_display_lot(value):
 
 def delivery_internal_lots(frame, main_records, packing_records):
     """Propose WIP/FG lots from Sheet 1, then Source WIP Lot for missing FG."""
+    main_records = [row for row in main_records if not is_cancelled(row)]
+    packing_records = [row for row in packing_records if not is_cancelled(row)]
     normalize = lambda value: "".join(character for character in key(value) if character.isalnum())
     unknown = {"", "tbc", "tbd", "na", "none"}
 
@@ -2729,6 +3707,12 @@ def _history(sh, sheet_name, title, prefix):
     if not rows:
         st.caption("ยังไม่มีประวัติ")
         return
+    show_cancelled = st.checkbox("รวมรายการที่ยกเลิกแล้ว", key=f"{prefix}_history_cancelled")
+    if not show_cancelled:
+        rows = [row for row in rows if not is_cancelled(row)]
+    if not rows:
+        st.caption("ไม่มีรายการที่ยังใช้งานอยู่ เลือกรวมรายการที่ยกเลิกแล้วเพื่อดูประวัติ")
+        return
     frame = _numeric_frame(rows)
     date_column = "Packing Date" if "Packing Date" in frame else "Shipment Date" if "Shipment Date" in frame else "Timestamp"
     dates = frame.get(date_column, pd.Series("", index=frame.index)).map(_parse_optional)
@@ -2751,7 +3735,8 @@ def _history(sh, sheet_name, title, prefix):
     selected["_sort_date"] = pd.to_datetime(dates[mask], errors="coerce")
     selected = selected.sort_values("_sort_date", ascending=False, kind="stable", na_position="last").drop(columns="_sort_date")
     visible = ["Packing Date", "Shipment Date", "Cultivar Name", "Export Name", "Cultivar / Product", "Generated FG Lot No.", "Lot No.",
-               "Grade", "Quantity", "Shipped Qty", "Produced Qty", "Waste Qty", "Supplier Name", "Consignee (ปลายทาง)", "Shipping Reason"]
+               "Grade", "Quantity", "Shipped Qty", "Produced Qty", "Waste Qty", "Supplier Name", "Consignee (ปลายทาง)", "Shipping Reason",
+               "Transaction Status", "Cancelled At", "Cancel Reason"]
     st.caption(f"{len(selected):,} รายการ · เรียงรายการล่าสุดก่อน · หน่วยกรัม")
     _render_table(selected.head(1000), columns=visible)
     st.download_button("ดาวน์โหลดประวัติ CSV", selected.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
@@ -2875,6 +3860,8 @@ def _pending_requests(sh):
     shipped = get_display_records(sh, "Shipped_Out_Log")
     shipped_by_line = defaultdict(float)
     for row in shipped:
+        if is_cancelled(row):
+            continue
         identity = (text(row.get("Request ID")), text(row.get("Line ID")))
         try:
             shipped_by_line[identity] += float(str(row.get("Shipped Qty", "0")).replace(",", ""))
@@ -2882,6 +3869,8 @@ def _pending_requests(sh):
             continue
     pending = {}
     for row in rows:
+        if is_cancelled(row):
+            continue
         request_id, line_id = text(row.get("Request ID")), text(row.get("Line ID"))
         state = key(row.get("Request Status", row.get("Lifecycle", row.get("Workflow Status", "Open"))))
         if not request_id or not line_id or state in {"completed", "cancelled", "canceled"}:
@@ -3133,7 +4122,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '3ecf5ed6822e9b38b24b7b58d6ce43c9a105d0a936df8427f16c4a8c730f7d18'
+_embedded_bundle = 'f36a49777d98925c4b6de4f880effb2cd12b95960ed6b6ef5f085c0c0863c675'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -3160,6 +4149,7 @@ import logging
 import trading_core as core
 import trading_transactions as transactions
 import trading_requests as requests_service
+from trading_cancellation_ui import render_cancellation_panel
 from trading_sheets import (
     QuotaHTTPClient, begin_display_run, get_display_records, get_display_values, get_display_worksheet,
     get_display_loaded_at, invalidate_display_cache, read_error_message,
@@ -3410,13 +4400,16 @@ def build_picking_catalog(main_records, packing_records):
             item["wip_qty"] += quantity
 
     for record in main_records:
+        if core.is_cancelled(record):
+            continue
         category = picking_text(record.get("Category")).upper()
         if "WIP" in category:
             add(record, "WIP")
         elif "FG" in category:
             add(record, "FG")
     for record in packing_records:
-        add(record, "FG", packed=True)
+        if not core.is_cancelled(record):
+            add(record, "FG", packed=True)
     for item in catalog.values():
         item["wip_qty"] = float(item["wip_qty"])
         item["fg_by_grade"] = {grade: float(value) for grade, value in item["fg_by_grade"].items()}
@@ -3470,6 +4463,7 @@ def prepare_picking_lines(records, catalog, default_consignee="", default_true_c
 
 def project_picking_rows(rows, catalog):
     demand, progress = {}, {}
+    rows = [row for row in rows if not core.is_cancelled(row)]
     for row in rows:
         request_id = picking_text(row.get("Request ID")) or "DRAFT"
         quantity = core.decimal_quantity(picking_quantity(row.get("Volume")) or 0)
@@ -3539,6 +4533,8 @@ def parse_picking_records(values):
             continue
         record = {header: values_row[index] if index < len(values_row) else ""
                   for index, header in enumerate(headers)}
+        if core.is_cancelled(record):
+            continue
         if not any(picking_text(record.get(header)) for header in PICKING_HEADERS):
             continue
         for header in PICKING_HEADERS:
@@ -3776,7 +4772,7 @@ def find_delivery_column(columns, field):
 
 def merge_delivery_requests(legacy_records, picking_records, catalog):
     columns = list(dict.fromkeys(key for row in legacy_records for key in row))
-    rows = [dict(row, _Delivery_Source="legacy") for row in legacy_records]
+    rows = [dict(row, _Delivery_Source="legacy") for row in legacy_records if not core.is_cancelled(row)]
     mappings = {field: find_delivery_column(columns, field) for field in [
         "Cultivar Name", "Grade", "Volume", "Consignee", "True Consignee", "Expected Shipping Date",
         "Available FG", "Available WIP", "Project Owner", "Type", "Supplier Name",
@@ -4222,6 +5218,8 @@ def render_registration_recovery():
         st.stop()
     if result is not None:
         finish_registration_operation(operation)
+        if result.get("transaction_cancelled"):
+            st.session_state["registration_flash"]["message"] = "ธุรกรรมเดิมถูกยกเลิกแล้ว กรุณาเริ่มรายการใหม่หากต้องการบันทึกอีกครั้ง"
         st.rerun()
     st.warning("รายการก่อนหน้ายังยืนยันผลไม่ได้ กรุณาลองบันทึกรายการเดิม ระบบจะใช้รหัสเดิมเพื่อตรวจและป้องกันการบันทึกซ้ำ")
     if st.button("ลองบันทึกรายการเดิมอีกครั้ง", key="registration_retry_original", disabled=not can_write()):
@@ -4286,6 +5284,16 @@ try:
     st.sidebar.markdown("---")
     st.sidebar.info("ระบบจัดการสินค้า Trading และกระบวนการ Packing (Pastel Theme)")
 
+    cancellation_scopes = {
+        "🚨 Delivery Issue": {"DELIVERY_UPDATE", "SHIP"},
+        "📋 Picking Request": {"PICKING_CREATE", "PICKING_EDIT", "PICKING_CANCEL"},
+        "📝 Trading Goods Registration": {"RECEIPT"},
+        "✏️ Edit Registration": {"ADJUST", "RECEIPT"},
+        "📦 Packing Module": {"PACK"},
+        "🚚 Shipped Out Module": {"SHIP"},
+    }
+    render_cancellation_panel(sh, kinds=cancellation_scopes.get(menu), key_prefix="portal_cancel")
+
 
     # ==========================================
     # หน้าที่ 1: Delivery Issue
@@ -4308,7 +5316,8 @@ try:
         legacy_delivery_rows = []
         try:
             del_sheet = get_display_worksheet(sh, "Delivery_schedule")
-            legacy_delivery_rows = get_cached_data("delivery", del_sheet, include_row_index=True)
+            legacy_delivery_rows = [row for row in get_cached_data("delivery", del_sheet, include_row_index=True)
+                                    if not core.is_cancelled(row)]
         except gspread.exceptions.WorksheetNotFound:
             st.info("ยังไม่มีแท็บ Delivery_schedule รายการ Picking Request ที่สร้างแล้วจะแสดงด้านล่างได้")
         except Exception as error:
