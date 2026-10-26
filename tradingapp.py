@@ -423,6 +423,265 @@ def append_records_request(sheet_id: int, headers: Sequence[str], records: Seque
                             "rows": [{"values": row_cells(headers, record, numeric_fields=numeric_fields)} for record in records]}}
 '''
 
+# Embedded application module: trading_sheets.py
+_embedded_sources['trading_sheets'] = '''"""Shared display snapshots and bounded read traffic for Google Sheets.
+
+Display caches are deliberately separate from transaction reads. Writers keep
+using the original Spreadsheet and read fresh data under their fencing lease.
+"""
+from __future__ import annotations
+
+from collections import deque
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import math
+import random
+import threading
+import time
+
+import gspread
+from gspread.http_client import HTTPClient
+import streamlit as st
+from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+from trading_core import inventory_from_records, now_bangkok, parse_sheet
+
+
+DISPLAY_TTL = 120
+DISPLAY_TITLES = ("Packing_Records", "Packing_Log", "Shipped_Out_Log",
+                  "Picking_Requests", "Delivery_schedule", "Stock_Movements")
+
+
+class SheetsReadLimitError(RuntimeError):
+    def __init__(self, retry_after=60):
+        self.retry_after = max(1, math.ceil(retry_after))
+        super().__init__(f"Google Sheets จำกัดการอ่านข้อมูล กรุณารอประมาณ {self.retry_after} วินาทีแล้วลองใหม่ ข้อมูลที่กรอกยังอยู่")
+
+
+class ReadBudget:
+    """A process-wide rolling budget shared by clients of one service account."""
+
+    def __init__(self, limit=45, period=60, clock=time.monotonic):
+        self.limit, self.period, self.clock = limit, period, clock
+        self.requests = deque()
+        self.blocked_until = 0.0
+        self.lock = threading.Lock()
+
+    def acquire(self):
+        with self.lock:
+            now = self.clock()
+            while self.requests and self.requests[0] <= now - self.period:
+                self.requests.popleft()
+            wait = max(0.0, self.blocked_until - now)
+            if len(self.requests) >= self.limit:
+                wait = max(wait, self.requests[0] + self.period - now)
+            if wait > 0:
+                raise SheetsReadLimitError(wait)
+            self.requests.append(now)
+
+    def defer(self, seconds):
+        with self.lock:
+            self.blocked_until = max(self.blocked_until, self.clock() + seconds)
+
+
+_BUDGETS = {}
+_BUDGET_LOCK = threading.Lock()
+
+
+def _account_budget(auth):
+    identity = (getattr(auth, "service_account_email", None)
+                or getattr(auth, "_service_account_email", None)
+                or getattr(auth, "signer_email", None) or "default-service-account")
+    with _BUDGET_LOCK:
+        return _BUDGETS.setdefault(identity, ReadBudget())
+
+
+def _status(error):
+    return getattr(getattr(error, "response", None), "status_code", None) or getattr(error, "code", None)
+
+
+def is_quota_error(error):
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, SheetsReadLimitError) or _status(error) == 429:
+            return True
+        if _status(error) == 403 and any(word in str(error).casefold() for word in ("quota", "ratelimitexceeded", "userratelimitexceeded")):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
+
+
+def read_error_message(error):
+    if is_quota_error(error):
+        if isinstance(error, SheetsReadLimitError):
+            return str(error)
+        return "Google Sheets จำกัดการอ่านข้อมูลชั่วคราว กรุณารอประมาณ 1 นาทีแล้วลองใหม่ ข้อมูลที่กรอกยังอยู่"
+    return str(error)
+
+
+def _retry_after(error):
+    raw = getattr(getattr(error, "response", None), "headers", {}).get("Retry-After", "")
+    try:
+        delay = float(raw)
+    except (ValueError, TypeError):
+        try:
+            delay = (parsedate_to_datetime(raw) - datetime.now(timezone.utc)).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            delay = 60
+    return min(300.0, max(1.0, delay)) if math.isfinite(delay) else 60.0
+
+
+class QuotaHTTPClient(HTTPClient):
+    """Budget GETs and honor cooldowns; never automatically replay writes."""
+
+    def __init__(self, auth, session=None):
+        super().__init__(auth, session)
+        self.read_budget = _account_budget(getattr(self, "auth", auth))
+        self.set_timeout((10, 45))
+
+    def request(self, method, endpoint, *args, **kwargs):
+        if method.casefold() != "get":
+            return super().request(method, endpoint, *args, **kwargs)
+        for attempt in range(3):
+            self.read_budget.acquire()
+            try:
+                return super().request(method, endpoint, *args, **kwargs)
+            except gspread.exceptions.APIError as error:
+                if is_quota_error(error):
+                    delay = _retry_after(error)
+                    self.read_budget.defer(delay)
+                    # A full quota window must not block the UI or create a retry
+                    # storm. Short explicit server cooldowns can recover inline.
+                    if delay > 3 or attempt == 2:
+                        raise SheetsReadLimitError(delay) from error
+                elif _status(error) in {500, 502, 503, 504} and attempt < 2:
+                    delay = (2 ** attempt) + random.uniform(0, 0.25)
+                else:
+                    raise
+                time.sleep(delay)
+
+
+def _cache_key(spreadsheet):
+    # The connection is a shared Streamlit resource. Its identity also isolates
+    # different credentials/workbook handles and in-memory workbooks in tests.
+    return f"{spreadsheet.id}:{id(spreadsheet)}"
+
+
+@st.cache_resource(show_spinner=False)
+def _last_good():
+    return {"snapshots": {}, "catalogs": {}, "lock": threading.RLock()}
+
+
+@st.cache_resource(ttl=DISPLAY_TTL, show_spinner=False)
+def _catalog(cache_key, _spreadsheet):
+    worksheets = tuple(_spreadsheet.worksheets())
+    state = _last_good()
+    with state["lock"]:
+        state["catalogs"][cache_key] = worksheets
+    return worksheets
+
+
+def _display_catalog(spreadsheet):
+    cache_key = _cache_key(spreadsheet)
+    try:
+        return _catalog(cache_key, spreadsheet)
+    except Exception as error:
+        state = _last_good()
+        with state["lock"]:
+            previous = state["catalogs"].get(cache_key)
+        if not is_quota_error(error) or previous is None:
+            raise
+        return previous
+
+
+def get_display_worksheet(spreadsheet, title=None, index=0):
+    worksheets = _display_catalog(spreadsheet)
+    if title is None:
+        return worksheets[index] if 0 <= index < len(worksheets) else None
+    for worksheet in worksheets:
+        if worksheet.title == title:
+            return worksheet
+    raise gspread.exceptions.WorksheetNotFound(title)
+
+
+def begin_display_run():
+    """Keep a quota notice visible once on each rendered page."""
+    if get_script_run_ctx(suppress_warning=True) is not None:
+        st.session_state["_display_quota_warning_shown"] = False
+
+
+@st.cache_data(ttl=DISPLAY_TTL, show_spinner=False)
+def _snapshot(cache_key, _spreadsheet):
+    worksheets = _display_catalog(_spreadsheet)
+    titles = [worksheet.title for index, worksheet in enumerate(worksheets)
+              if index == 0 or worksheet.title in DISPLAY_TITLES]
+    ranges = ["'" + title.replace("'", "''") + "'" for title in titles]
+    result = _spreadsheet.values_batch_get(ranges) if ranges else {"valueRanges": []}
+    values = result.get("valueRanges", [])
+    if len(values) != len(titles):
+        raise RuntimeError("Google Sheets ส่งข้อมูลกลับมาไม่ครบ กรุณาลองใหม่")
+    snapshot = {"values": {title: value.get("values", []) for title, value in zip(titles, values)},
+                "first_title": worksheets[0].title if worksheets else None,
+                "loaded_at": now_bangkok()}
+    state = _last_good()
+    with state["lock"]:
+        state["snapshots"][cache_key] = snapshot
+    return snapshot
+
+
+def _display_snapshot(spreadsheet):
+    cache_key = _cache_key(spreadsheet)
+    try:
+        return _snapshot(cache_key, spreadsheet)
+    except Exception as error:
+        state = _last_good()
+        with state["lock"]:
+            previous = state["snapshots"].get(cache_key)
+        if not is_quota_error(error) or previous is None:
+            raise
+        stamp = previous["loaded_at"].strftime("%d/%m/%Y %H:%M:%S")
+        if get_script_run_ctx(suppress_warning=True) is None or not st.session_state.get("_display_quota_warning_shown", False):
+            st.warning(f"{read_error_message(error)} · กำลังแสดงข้อมูลเดิมที่โหลดเมื่อ {stamp} (เวลาไทย) ยอดจริงจะตรวจใหม่ก่อนบันทึก")
+            if get_script_run_ctx(suppress_warning=True) is not None:
+                st.session_state["_display_quota_warning_shown"] = True
+        return previous
+
+
+def get_display_values(spreadsheet, title=None):
+    snapshot = _display_snapshot(spreadsheet)
+    return snapshot["values"].get(title or snapshot["first_title"], [])
+
+
+def get_display_records(spreadsheet, title=None, required_headers=()):
+    values = get_display_values(spreadsheet, title)
+    return parse_sheet(values, required_headers, sheet_name=title or "Sheet 1")[1]
+
+
+def get_display_inventory(spreadsheet, include_unavailable=False):
+    main = get_display_records(spreadsheet, required_headers=("Cultivar Name", "Category", "Grade", "Quantity"))
+    packed = get_display_records(spreadsheet, "Packing_Records", required_headers=("Quantity", "Grade"))
+    return inventory_from_records(main, packed, include_unavailable=include_unavailable)
+
+
+def get_display_loaded_at(spreadsheet):
+    state = _last_good()
+    with state["lock"]:
+        snapshot = state["snapshots"].get(_cache_key(spreadsheet))
+    return snapshot["loaded_at"] if snapshot else None
+
+
+def invalidate_display_cache(spreadsheet):
+    """Invalidate only this connection after a write or explicit refresh."""
+    cache_key = _cache_key(spreadsheet)
+    _snapshot.clear(cache_key, spreadsheet)
+    _catalog.clear(cache_key, spreadsheet)
+    state = _last_good()
+    with state["lock"]:
+        state["snapshots"].pop(cache_key, None)
+        state["catalogs"].pop(cache_key, None)
+'''
+
 # Embedded application module: trading_transactions.py
 _embedded_sources['trading_transactions'] = '''"""Atomic, retry-safe inventory writes for the Google Sheets portal.
 
@@ -579,7 +838,18 @@ class MutationContext:
         self.operation_id = operation_id
         self.requests = []
         self.plans = {}
-        self.reserved_ids = {int(ws.id) for ws in spreadsheet.worksheets()}
+        # One fresh metadata snapshot belongs to this fenced operation only.
+        # Looking up each title through gspread would issue another API read.
+        worksheets = spreadsheet.worksheets()
+        self.worksheets = {worksheet.title: worksheet for worksheet in worksheets}
+        self.first_worksheet = worksheets[0] if worksheets else None
+        self.reserved_ids = {int(ws.id) for ws in worksheets}
+
+    def read_history(self, title):
+        """Reuse a fresh plan within this mutation; never consult a UI cache."""
+        if title not in self.worksheets and title not in self.plans:
+            return []
+        return self.worksheet_plan(title).records
 
     def new_sheet_id(self):
         while True:
@@ -596,7 +866,7 @@ class MutationContext:
                 raise ValidationError(f"หัวตาราง {title} ไม่ครบ: {', '.join(missing)}")
             self.ensure_columns(plan, optional_headers)
             return plan
-        worksheet = _worksheet(self.spreadsheet, title)
+        worksheet = self.worksheets.get(title)
         if worksheet is None:
             if not create:
                 raise ValidationError(f"ไม่พบชีต {title}")
@@ -711,10 +981,13 @@ def _acquire_lease(spreadsheet, operation_id):
 
 
 def _release_lease(spreadsheet, sheet_id, owner):
+    # _acquire_lease already established ownership of this exact random ID.
+    # Delete by ID rather than looking up the shared title: an expired writer
+    # must never delete a successor's lock, and exhausted GET quota must not
+    # prevent cleanup. A missing old ID simply makes this one request fail.
+    del owner
     try:
-        current = _worksheet(spreadsheet, LOCK_SHEET_NAME)
-        if current is not None and int(current.id) == sheet_id and _lease_data(current)[0] == owner:
-            spreadsheet.batch_update({"requests": [{"deleteSheet": {"sheetId": sheet_id}}]})
+        spreadsheet.batch_update({"requests": [{"deleteSheet": {"sheetId": sheet_id}}]})
     except Exception:
         # A failed cleanup leaves a visible busy condition, never permission to
         # continue writing without a lease. Its expiry is fenced as above.
@@ -722,7 +995,11 @@ def _release_lease(spreadsheet, sheet_id, owner):
 
 
 def _existing_transaction(spreadsheet, transaction_id, kind, digest):
-    matches = [row for row in get_transactions(spreadsheet) if text(row.get("Transaction ID")) == transaction_id]
+    return _transaction_receipt(get_transactions(spreadsheet), transaction_id, kind, digest)
+
+
+def _transaction_receipt(records, transaction_id, kind, digest):
+    matches = [row for row in records if text(row.get("Transaction ID")) == transaction_id]
     if not matches:
         return None
     if len(matches) != 1 or text(matches[0].get("Kind")) != kind or text(matches[0].get("Payload Hash")) != digest:
@@ -765,19 +1042,21 @@ def run_fenced_mutation(spreadsheet, transaction_id, kind, payload, builder):
     if existing is not None:
         return existing
     sheet_id, owner = _acquire_lease(spreadsheet, transaction_id)
+    lease_released = False
     try:
-        existing = _existing_transaction(spreadsheet, transaction_id, kind, digest)
+        context = MutationContext(spreadsheet, transaction_id)
+        transactions = context.worksheet_plan(TRANSACTION_SHEET_NAME, TRANSACTION_HEADERS, create=True)
+        existing = _transaction_receipt(transactions.records, transaction_id, kind, digest)
         if existing is not None:
             return existing
-        context = MutationContext(spreadsheet, transaction_id)
         result = dict(builder(context) or {})
         result.update(transaction_id=transaction_id, already_saved=False)
-        transactions = context.worksheet_plan(TRANSACTION_SHEET_NAME, TRANSACTION_HEADERS, create=True)
         context.append(transactions, [{"Transaction ID": transaction_id, "Kind": kind, "Payload Hash": digest,
                                        "Created At": now_bangkok().isoformat(), "Result JSON": _json(result)}])
         context.requests.append({"deleteSheet": {"sheetId": sheet_id}})
         try:
             spreadsheet.batch_update({"requests": context.requests})
+            lease_released = True  # deleteSheet was committed in this atomic batch.
         except Exception:
             committed = _existing_transaction(spreadsheet, transaction_id, kind, digest)
             if committed is not None:
@@ -785,11 +1064,14 @@ def run_fenced_mutation(spreadsheet, transaction_id, kind, payload, builder):
             raise
         return result
     finally:
-        _release_lease(spreadsheet, sheet_id, owner)
+        if not lease_released:
+            _release_lease(spreadsheet, sheet_id, owner)
 
 
 def _inventory_plans(context):
-    main = context.spreadsheet.get_worksheet(0)
+    main = context.first_worksheet
+    if main is None:
+        raise ValidationError("ไม่พบชีตสต็อกหลัก")
     main_plan = context.worksheet_plan(main.title, MAIN_REQUIRED, [*MAIN_HEADERS, *MAIN_META_HEADERS])
     packing_plan = context.worksheet_plan("Packing_Records", PACK_REQUIRED, [*PACK_HEADERS, *PACK_META_HEADERS], create=True)
     return {"main": main_plan, "packing_records": packing_plan}
@@ -1103,8 +1385,9 @@ def ship_inventory(spreadsheet, transaction_id, lines, metadata):
             request_rows[request_key] = row
             request_line_ids.add(line_id)
         logged_shipped = {}
+        logs = context.worksheet_plan("Shipped_Out_Log", SHIP_HEADERS, SHIP_META_HEADERS, create=True)
         if request_plan is not None:
-            for row in read_history(context.spreadsheet, "Shipped_Out_Log"):
+            for row in logs.records:
                 request_key = (text(row.get("Request ID")), text(row.get("Line ID")))
                 if request_key[0] and request_key[1]:
                     logged_shipped[request_key] = logged_shipped.get(request_key, _ZERO) + decimal_quantity(row.get("Shipped Qty"), field="ยอดส่งในประวัติ")
@@ -1178,7 +1461,6 @@ def ship_inventory(spreadsheet, transaction_id, lines, metadata):
                     updates = {"Request Status": status}
                     updates["Shipped Volume"] = new_shipped.get(request_key, fulfilled[request_key])
                     context.update(request_plan, row["Original_Row_Index"], updates)
-        logs = context.worksheet_plan("Shipped_Out_Log", SHIP_HEADERS, SHIP_META_HEADERS, create=True)
         context.append(logs, log_rows)
         context.append(movements, movement_rows)
         return {"inventory_ids": list(groups), "line_count": len(prepared_lines),
@@ -1216,10 +1498,12 @@ PICKING_HEADERS = PICKING_BASE_HEADERS + [
 OPTIONAL_HEADERS = [name for name in PICKING_HEADERS if name not in PICKING_BASE_HEADERS]
 
 
-def request_progress(spreadsheet, rows):
+def request_progress(spreadsheet, rows, *, shipments=None):
     """Use linked shipment history if a manually edited counter is stale."""
+    if not rows:
+        return []
     sent = {}
-    for shipment in read_history(spreadsheet, "Shipped_Out_Log"):
+    for shipment in read_history(spreadsheet, "Shipped_Out_Log") if shipments is None else shipments:
         identity = (text(shipment.get("Request ID")), text(shipment.get("Line ID")))
         if all(identity):
             sent[identity] = sent.get(identity, 0) + decimal_quantity(shipment.get("Shipped Qty"))
@@ -1343,7 +1627,8 @@ def update_picking_request(spreadsheet, request_id, expected_rows, lines):
 
     def build(ctx):
         plan = ctx.worksheet_plan(PICKING_SHEET_NAME, PICKING_BASE_HEADERS, OPTIONAL_HEADERS)
-        current = request_progress(spreadsheet, [row for row in plan.records if text(row.get("Request ID")) == request_id])
+        current = request_progress(spreadsheet, [row for row in plan.records if text(row.get("Request ID")) == request_id],
+                                   shipments=ctx.read_history("Shipped_Out_Log"))
         if any(key(row.get("Request Status")) == "cancelled" for row in current):
             raise ValidationError("คำขอนี้ถูกยกเลิกแล้ว")
         # Another stock transaction can have shipped a line while the editor was open.
@@ -1392,7 +1677,8 @@ def delete_picking_request(spreadsheet, request_id, expected_rows):
 
     def build(ctx):
         plan = ctx.worksheet_plan(PICKING_SHEET_NAME, PICKING_BASE_HEADERS, OPTIONAL_HEADERS)
-        current = request_progress(spreadsheet, [row for row in plan.records if text(row.get("Request ID")) == request_id])
+        current = request_progress(spreadsheet, [row for row in plan.records if text(row.get("Request ID")) == request_id],
+                                   shipments=ctx.read_history("Shipped_Out_Log"))
         already = bool(current) and all(key(row.get("Request Status")) == "cancelled" for row in current)
         if current and not already:
             if not same_payload(current, expected_rows):
@@ -1424,6 +1710,7 @@ def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=No
 
     def build(ctx):
         seen, split_ids = set(), []
+        progress_by_request = {}
         for target in targets:
             title = target["worksheet"].title
             is_request = title == PICKING_SHEET_NAME
@@ -1461,8 +1748,13 @@ def update_delivery_details(spreadsheet, targets, *, new_date=None, permit_no=No
                 if volume_header not in plan.headers:
                     raise ValidationError("ไม่พบคอลัมน์ Volume ของรายการที่เลือก")
                 if is_request:
-                    progress = request_progress(spreadsheet, [record for record in plan.records
-                                               if text(record.get("Request ID")) == text(row["Request ID"])])
+                    request_id = text(row["Request ID"])
+                    if request_id not in progress_by_request:
+                        progress_by_request[request_id] = request_progress(
+                            spreadsheet, [record for record in plan.records if text(record.get("Request ID")) == request_id],
+                            shipments=ctx.read_history("Shipped_Out_Log"),
+                        )
+                    progress = progress_by_request[request_id]
                     effective = next(record for record in progress if text(record["Line ID"]) == text(row["Line ID"]))
                 else:
                     effective = row
@@ -2070,10 +2362,13 @@ from uuid import uuid4
 import pandas as pd
 import streamlit as st
 
-from trading_core import ValidationError, key, parse_date, read_records, text, today_bangkok
+from trading_core import ValidationError, key, parse_date, text, today_bangkok
 from trading_reports import monthly_report
 from trading_transactions import (
-    get_inventory, get_transaction_result, pack_inventory, read_history, read_stock_movements, ship_inventory,
+    get_transaction_result, pack_inventory, ship_inventory,
+)
+from trading_sheets import (
+    begin_display_run, get_display_inventory, get_display_records, invalidate_display_cache, read_error_message,
 )
 
 
@@ -2097,6 +2392,7 @@ def availability_total(value):
 
 
 def render_workflow_styles():
+    begin_display_run()
     st.markdown("""<style>
     .st-key-wf_packing, .st-key-wf_shipping, .st-key-wf_monthly {
         --wf-accent: #0f766e; --wf-tint: #f0fdfa; --wf-line: #b8e4dc;
@@ -2168,8 +2464,8 @@ def _can_write():
     return bool(st.session_state.get("portal_can_write", True))
 
 
-def _finish_transaction(kind, result):
-    st.cache_data.clear()
+def _finish_transaction(sh, kind, result):
+    invalidate_display_cache(sh)
     quantity = result.get("total_quantity")
     label = "การแพ็ก" if kind == "packing" else "การส่งสินค้า"
     amount = f" · {_fmt(quantity)} g" if quantity is not None else ""
@@ -2198,10 +2494,10 @@ def _recover_pending(sh, draft):
         receipt_error = error
     else:
         if result is not None:
-            _finish_transaction(draft["kind"], result)
+            _finish_transaction(sh, draft["kind"], result)
     st.warning("ยังต้องยืนยันผลของรายการที่กดบันทึกไว้ ระบบเก็บข้อมูลและหมายเลขเดิมไว้เพื่อป้องกันบันทึกซ้ำ")
     if receipt_error is not None:
-        st.caption(f"ยังตรวจผลบันทึกไม่ได้: {receipt_error}")
+        st.caption(f"ยังตรวจผลบันทึกไม่ได้: {read_error_message(receipt_error)}")
     st.caption("กรุณาตรวจผลรายการเดิมให้เสร็จก่อนเริ่มรายการใหม่ ข้อมูลที่กรอกยังคงอยู่")
     left, right = st.columns(2, gap="large")
     with left:
@@ -2219,9 +2515,9 @@ def _recover_pending(sh, draft):
                 st.session_state[f"workflow_{draft['kind']}_retry_error"] = str(error)
                 st.rerun()
             except Exception as error:
-                st.error(f"ยังยืนยันผลบันทึกไม่ได้: {error}")
+                st.error(f"ยังยืนยันผลบันทึกไม่ได้: {read_error_message(error)}")
             else:
-                _finish_transaction(draft["kind"], result)
+                _finish_transaction(sh, draft["kind"], result)
     return True
 
 
@@ -2426,9 +2722,9 @@ def _history(sh, sheet_name, title, prefix):
     st.divider()
     st.subheader(title)
     try:
-        rows = read_history(sh, sheet_name)
+        rows = get_display_records(sh, sheet_name)
     except Exception as error:
-        st.error(f"โหลดประวัติไม่สำเร็จ: {error}")
+        st.error(f"โหลดประวัติไม่สำเร็จ: {read_error_message(error)}")
         return
     if not rows:
         st.caption("ยังไม่มีประวัติ")
@@ -2479,9 +2775,9 @@ def render_packing_page(sh):
             _reset("packing")
             st.rerun()
         try:
-            inventory = get_inventory(sh, fresh=True)
+            inventory = get_display_inventory(sh)
         except Exception as error:
-            st.error(f"โหลดสต็อกไม่สำเร็จ กรุณาลองใหม่: {error}")
+            st.error(f"โหลดสต็อกไม่สำเร็จ: {read_error_message(error)}")
             return
         wip = {item["inventory_id"]: item for item in inventory
                if "WIP" in text(item.get("category")).upper() and float(item.get("quantity", 0)) > 0
@@ -2564,10 +2860,10 @@ def render_packing_page(sh):
                     draft.pop("attempt", None)
                     st.error(f"กรุณาตรวจข้อมูลก่อนบันทึก: {error}")
                 except Exception as error:
-                    st.error(f"ยังยืนยันการบันทึกไม่ได้: {error}")
+                    st.error(f"ยังยืนยันการบันทึกไม่ได้: {read_error_message(error)}")
                     st.caption("ข้อมูลยังอยู่ หากการเชื่อมต่อขัดข้องให้ลองบันทึกซ้ำด้วยข้อมูลเดิม")
                 else:
-                    st.cache_data.clear()
+                    invalidate_display_cache(sh)
                     st.session_state["workflow_packing_flash"] = f"บันทึกการแพ็กแล้ว · เบิก {_fmt(total_withdrawal)} g · ได้ FG {_fmt(total_output)} g"
                     _reset("packing")
                     st.rerun()
@@ -2575,8 +2871,8 @@ def render_packing_page(sh):
 
 
 def _pending_requests(sh):
-    rows = read_history(sh, "Picking_Requests")
-    shipped = read_history(sh, "Shipped_Out_Log")
+    rows = get_display_records(sh, "Picking_Requests")
+    shipped = get_display_records(sh, "Shipped_Out_Log")
     shipped_by_line = defaultdict(float)
     for row in shipped:
         identity = (text(row.get("Request ID")), text(row.get("Line ID")))
@@ -2619,12 +2915,12 @@ def render_shipping_page(sh):
             _reset("shipping")
             st.rerun()
         try:
-            available = get_inventory(sh, fresh=True)
+            available = get_display_inventory(sh)
             inventory = {item["inventory_id"]: item for item in available if float(item.get("quantity", 0)) > 0
                          and key(item.get("record", {}).get("Status")) != "delivered"}
             requests = _pending_requests(sh)
         except Exception as error:
-            st.error(f"โหลดสต็อกหรือ Picking Request ไม่สำเร็จ: {error}")
+            st.error(f"โหลดสต็อกหรือ Picking Request ไม่สำเร็จ: {read_error_message(error)}")
             return
         with st.container(key="wf_card_shipping_header"):
             _heading(1, "ข้อมูลการจัดส่ง", "รายการที่อ้าง Picking Request จะใช้ผู้รับและข้อมูลโครงการจาก Request แยกรายบรรทัด")
@@ -2734,10 +3030,10 @@ def render_shipping_page(sh):
                     draft.pop("attempt", None)
                     st.error(f"กรุณาตรวจข้อมูลก่อนบันทึก: {error}")
                 except Exception as error:
-                    st.error(f"ยังยืนยันการส่งไม่ได้: {error}")
+                    st.error(f"ยังยืนยันการส่งไม่ได้: {read_error_message(error)}")
                     st.caption("ข้อมูลยังอยู่ หากการเชื่อมต่อขัดข้องให้ลองบันทึกซ้ำด้วยข้อมูลเดิม")
                 else:
-                    st.cache_data.clear()
+                    invalidate_display_cache(sh)
                     st.session_state["workflow_shipping_flash"] = f"บันทึกการส่งแล้ว · {len(lines):,} รายการ · {_fmt(sum(demand.values()))} g"
                     _reset("shipping")
                     st.rerun()
@@ -2751,13 +3047,13 @@ def render_monthly_page(sh):
         st.title("Monthly Report")
         st.caption("ตรวจยอดยกมา รับเข้า ใช้ไป และคงเหลือ พร้อมประวัติการส่งออกตามเดือน")
         try:
-            main_rows = read_records(sh.get_worksheet(0))
-            packing_rows = read_history(sh, "Packing_Records")
-            shipped_rows = read_history(sh, "Shipped_Out_Log")
-            packing_logs = read_history(sh, "Packing_Log")
-            movements = read_stock_movements(sh)
+            main_rows = get_display_records(sh)
+            packing_rows = get_display_records(sh, "Packing_Records")
+            shipped_rows = get_display_records(sh, "Shipped_Out_Log")
+            packing_logs = get_display_records(sh, "Packing_Log")
+            movements = get_display_records(sh, "Stock_Movements")
         except Exception as error:
-            st.error(f"โหลดข้อมูลรายงานไม่สำเร็จ: {error}")
+            st.error(f"โหลดข้อมูลรายงานไม่สำเร็จ: {read_error_message(error)}")
             return
         today = today_bangkok()
         years = {today.year, today.year - 1, today.year + 1}
@@ -2837,7 +3133,7 @@ def render_monthly_page(sh):
                 st.download_button("ดาวน์โหลดรายการส่งออก CSV", shipments.drop(columns=["Original_Row_Index"], errors="ignore").to_csv(index=False).encode("utf-8-sig"),
                                    file_name=f"shipments-{year}-{month:02d}.csv", mime="text/csv", key="monthly_shipping_download")
 '''
-_embedded_bundle = '9e7a0be8591987fc0e64660fe8717885389dff241179c7bdb97e9b45cc1e58c7'
+_embedded_bundle = '3ecf5ed6822e9b38b24b7b58d6ce43c9a105d0a936df8427f16c4a8c730f7d18'
 for _embedded_name, _embedded_source in _embedded_sources.items():
     _embedded_cached = _embedded_sys.modules.get(_embedded_name)
     if getattr(_embedded_cached, "__embedded_bundle__", None) == _embedded_bundle:
@@ -2864,6 +3160,10 @@ import logging
 import trading_core as core
 import trading_transactions as transactions
 import trading_requests as requests_service
+from trading_sheets import (
+    QuotaHTTPClient, begin_display_run, get_display_records, get_display_values, get_display_worksheet,
+    get_display_loaded_at, invalidate_display_cache, read_error_message,
+)
 from trading_workflows_ui import render_packing_page, render_shipping_page, render_monthly_page, render_numeric_dataframe, delivery_internal_lots, fg_display_lot, first_display_lot, availability_total
 
 # ==========================================
@@ -2872,6 +3172,7 @@ from trading_workflows_ui import render_packing_page, render_shipping_page, rend
 st.set_page_config(
     page_title="Thai Stick Trading Portal", page_icon="🌱", layout="wide"
 )
+begin_display_run()
 
 st.markdown(
     """
@@ -2894,38 +3195,26 @@ st.markdown(
 # ==========================================
 # 2. ฟังก์ชัน Cache ที่ปลอดภัย (แยกจำแต่ละ Sheet เด็ดขาด)
 # ==========================================
-@st.cache_resource
-def sync_registry():
-    return {}
-
-
-@st.cache_data(ttl=30, show_spinner=False)
 def get_cached_data(sheet_name, _sheet, include_row_index=False):
-    if _sheet is None:
-        title = {"packing": "Packing_Records", "shipped": "Shipped_Out_Log"}.get(sheet_name)
-        if title:
-            try:
-                _sheet = sh.worksheet(title)
-            except gspread.exceptions.WorksheetNotFound:
-                return []
-        else:
-            return []
+    title = None if sheet_name == "main" else getattr(_sheet, "title", None) or {
+        "packing": "Packing_Records", "shipped": "Shipped_Out_Log", "delivery": "Delivery_schedule",
+    }.get(sheet_name)
+    required = ("Cultivar Name", "Category", "Grade", "Quantity") if sheet_name == "main" else ("Quantity", "Grade") if sheet_name == "packing" else ()
     try:
-        records = core.read_records(_sheet)
+        records = get_display_records(sh, title, required_headers=required)
         if sheet_name in {"main", "packing"}:
             for record in records:
-                core.decimal_quantity(record.get("Quantity"), field=f"จำนวนใน {_sheet.title} แถว {record['Original_Row_Index']}")
+                core.decimal_quantity(record.get("Quantity"), field=f"จำนวนใน {title or 'Sheet 1'} แถว {record['Original_Row_Index']}")
                 if sheet_name == "main" and not any(value in picking_text(record.get("Category")).upper() for value in ["WIP", "FG"]):
-                    raise core.ValidationError(f"ประเภทสินค้าใน {_sheet.title} แถว {record['Original_Row_Index']} ไม่ใช่ WIP / FG")
-        sync_registry()[sheet_name] = core.now_bangkok()
+                    raise core.ValidationError(f"ประเภทสินค้าใน {title or 'Sheet 1'} แถว {record['Original_Row_Index']} ไม่ใช่ WIP / FG")
         return records if include_row_index else [
             {key: value for key, value in record.items() if key != "Original_Row_Index"} for record in records
         ]
     except core.ValidationError:
         raise
     except Exception as error:
-        logging.getLogger(__name__).exception("Sheet read failed: %s", getattr(_sheet, "title", sheet_name))
-        raise RuntimeError(f"โหลดข้อมูล {getattr(_sheet, 'title', sheet_name)} ไม่สำเร็จ กรุณารีเฟรชหรือลองใหม่") from error
+        logging.getLogger(__name__).exception("Sheet read failed: %s", title or sheet_name)
+        raise RuntimeError(f"โหลดข้อมูล {title or sheet_name} ไม่สำเร็จ: {read_error_message(error)}") from error
 
 # ==========================================
 # 3. ฟังก์ชันเชื่อมต่อ Google Sheets (โหลดครั้งเดียว ประหยัดโควตา API)
@@ -2937,15 +3226,15 @@ def init_google_sheets(sheet_name):
     creds = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["gcp_service_account"]), [
         "https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive",
     ])
-    client = gspread.authorize(creds)
-    workbook = client.open(sheet_name)
-    main = workbook.get_worksheet(0)
-    headers, _ = core.parse_sheet(main.get_all_values(), sheet_name=main.title)
-    if headers:
-        core.validate_headers(headers, ["Cultivar Name", "Category", "Grade", "Quantity"], sheet_name=main.title)
+    client = gspread.authorize(creds, http_client=QuotaHTTPClient)
+    spreadsheet_id = str(st.secrets.get("sheets", {}).get("spreadsheet_id", "")).strip()
+    workbook = client.open_by_key(spreadsheet_id) if spreadsheet_id else client.open(sheet_name)
+    main = get_display_worksheet(workbook)
+    if main is None:
+        raise core.ValidationError("ไม่พบ Sheet 1 ใน Google Sheets")
     def optional(title):
         try:
-            return workbook.worksheet(title)
+            return get_display_worksheet(workbook, title)
         except gspread.exceptions.WorksheetNotFound:
             return None
     return client, workbook, main, optional("Packing_Records"), optional("Packing_Log"), optional("Shipped_Out_Log")
@@ -2980,12 +3269,11 @@ def require_write_permission():
 
 
 def refresh_portal_data():
-    get_cached_data.clear()
-    get_cached_picking_rows.clear()
+    invalidate_display_cache(sh)
 
 def reload_registration_edit(row_number, inventory_id):
     """Explicitly discard this editor's stale snapshot and load fresh stock."""
-    get_cached_data.clear()
+    invalidate_display_cache(sh)
     prefix = f"edit_{inventory_id}_"
     for state_key in list(st.session_state):
         if state_key.startswith(prefix):
@@ -3002,7 +3290,7 @@ try:
     client, sh, sheet, packing_records_sheet, packing_sheet, shipped_sheet = init_google_sheets(SHEET_NAME)
 except Exception as error:
     logging.getLogger(__name__).exception("Could not initialize workbook")
-    st.error(f"เปิดข้อมูลไม่ได้: {error}")
+    st.error(f"เปิดข้อมูลไม่ได้: {read_error_message(error)}")
     st.stop()
 
 # ==========================================
@@ -3236,8 +3524,7 @@ def project_picking_rows(rows, catalog):
 PICKING_SHEET_NAME = "Picking_Requests"
 
 
-def read_picking_records(worksheet):
-    values = worksheet.get_all_values()
+def parse_picking_records(values):
     if not values:
         return []
     headers = [str(value).strip() for value in values[0]]
@@ -3260,29 +3547,33 @@ def read_picking_records(worksheet):
         record["Shipped Volume"] = picking_quantity(record.get("Shipped Volume")) or 0.0
         record["Original_Row_Index"] = row_number
         records.append(record)
-    return requests_service.request_progress(sh, records)
+    return records
 
 
+def read_picking_records(worksheet):
+    return requests_service.request_progress(sh, parse_picking_records(worksheet.get_all_values()))
 
-@st.cache_data(ttl=30, show_spinner=False)
-def get_cached_picking_rows(_worksheet):
-    return read_picking_records(_worksheet)
+
+def get_cached_picking_rows(_worksheet, spreadsheet=None):
+    workbook = spreadsheet if spreadsheet is not None else sh
+    records = parse_picking_records(get_display_values(workbook, _worksheet.title))
+    shipments = get_display_records(workbook, "Shipped_Out_Log") if records else []
+    return requests_service.request_progress(workbook, records, shipments=shipments)
 
 
 def load_picking_requests(spreadsheet):
     try:
-        worksheet = spreadsheet.worksheet(PICKING_SHEET_NAME)
+        worksheet = get_display_worksheet(spreadsheet, PICKING_SHEET_NAME)
     except gspread.exceptions.WorksheetNotFound:
         return None, []
-    return worksheet, get_cached_picking_rows(worksheet)
+    return worksheet, get_cached_picking_rows(worksheet, spreadsheet)
 
 
 
 
 def save_picking_request(spreadsheet, request_id, created_at, lines, shipping_date):
     result = requests_service.save_picking_request(spreadsheet, request_id, created_at, lines, shipping_date)
-    get_cached_data.clear()
-    get_cached_picking_rows.clear()
+    invalidate_display_cache(spreadsheet)
     return result
 
 
@@ -3327,7 +3618,7 @@ def prepare_picking_changes(records, catalog, existing_rows):
             line = prepare_picking_lines([record], edit_catalog)[0]
             line["Expected Shipping Date"] = picking_shipping_date(record.get("Expected Shipping Date"))
         except ValueError as error:
-            raise ValueError(f"แถวแก้ไขที่ {index}: {error}") from None
+            raise ValueError(f"แถวแก้ไขที่ {index}: {read_error_message(error)}") from None
         line["Line ID"] = picking_text(record.get("Line ID"))
         # Keep saved reference metadata when only quantity/recipients/date change.
         original = next((row for row in existing_rows if picking_text(row.get("Line ID")) == line["Line ID"]), None)
@@ -3347,15 +3638,13 @@ def prepare_picking_changes(records, catalog, existing_rows):
 
 def update_picking_request(spreadsheet, request_id, expected_rows, lines):
     result = requests_service.update_picking_request(spreadsheet, request_id, expected_rows, lines)
-    get_cached_data.clear()
-    get_cached_picking_rows.clear()
+    invalidate_display_cache(spreadsheet)
     return result
 
 
 def delete_picking_request(spreadsheet, request_id, expected_rows):
     result = requests_service.delete_picking_request(spreadsheet, request_id, expected_rows)
-    get_cached_data.clear()
-    get_cached_picking_rows.clear()
+    invalidate_display_cache(spreadsheet)
     return result
 
 
@@ -3428,7 +3717,7 @@ def render_picking_manager(spreadsheet, catalog):
                         with st.spinner("กำลังบันทึกการแก้ไข..."):
                             result = update_picking_request(spreadsheet, request_id, manager["expected"], lines)
                     except Exception as error:
-                        st.error(f"ยังยืนยันการแก้ไขไม่ได้: {error}")
+                        st.error(f"ยังยืนยันการแก้ไขไม่ได้: {read_error_message(error)}")
                         st.caption("ข้อมูลที่กรอกยังอยู่ หากการเชื่อมต่อขัดข้องให้กดบันทึกซ้ำด้วยข้อมูลเดิม")
                     else:
                         st.session_state["picking_manage_flash"] = f"แก้ไข {request_id} แล้ว · {result['line_count']:,} รายการ"
@@ -3438,7 +3727,7 @@ def render_picking_manager(spreadsheet, catalog):
             with cancel_col:
                 if st.button("ยกเลิกการแก้ไข", key="picking_manage_cancel", width="stretch"):
                     del st.session_state["picking_manage"]
-                    get_cached_picking_rows.clear()
+                    invalidate_display_cache(sh)
                     st.rerun()
         else:
             st.markdown(f"**ยกเลิก Request: {request_id}**")
@@ -3452,7 +3741,7 @@ def render_picking_manager(spreadsheet, catalog):
                         with st.spinner("กำลังยกเลิก Picking Request..."):
                             result = delete_picking_request(spreadsheet, request_id, manager["expected"])
                     except Exception as error:
-                        st.error(f"ยังยืนยันการลบไม่ได้: {error}")
+                        st.error(f"ยังยืนยันการลบไม่ได้: {read_error_message(error)}")
                     else:
                         st.session_state["picking_manage_flash"] = f"ลบ {request_id} และนำรายการออกจาก Delivery Issue แล้ว"
                         st.session_state["picking_manage_draft_result"] = dict(result, deleted=True)
@@ -3461,7 +3750,7 @@ def render_picking_manager(spreadsheet, catalog):
             with cancel_col:
                 if st.button("ยกเลิกการลบ", key="picking_manage_cancel", width="stretch"):
                     del st.session_state["picking_manage"]
-                    get_cached_picking_rows.clear()
+                    invalidate_display_cache(sh)
                     st.rerun()
 
 
@@ -3504,8 +3793,7 @@ def merge_delivery_requests(legacy_records, picking_records, catalog):
 
 def update_delivery_dates(spreadsheet, targets, new_value):
     result = requests_service.update_delivery_dates(spreadsheet, targets, new_value)
-    get_cached_data.clear()
-    get_cached_picking_rows.clear()
+    invalidate_display_cache(spreadsheet)
     return result
 
 
@@ -3902,7 +4190,7 @@ def execute_registration_operation(operation):
 
 
 def finish_registration_operation(operation):
-    get_cached_data.clear()
+    invalidate_display_cache(sh)
     st.session_state.pop("registration_pending_operation", None)
     if operation["mode"] == "create":
         st.session_state["registration_create_reset"] = True
@@ -3928,7 +4216,7 @@ def render_registration_recovery():
         kind, payload = registration_operation_payload(operation)
         result = transactions.get_transaction_result(sh, operation["transaction_id"], kind, payload)
     except Exception as error:
-        st.warning(f"ยังตรวจสอบผลการบันทึกรายการเดิมไม่ได้: {error}")
+        st.warning(f"ยังตรวจสอบผลการบันทึกรายการเดิมไม่ได้: {read_error_message(error)}")
         if st.button("ตรวจสอบผลการบันทึกอีกครั้ง", key="registration_retry_status"):
             st.rerun()
         st.stop()
@@ -3944,7 +4232,7 @@ def render_registration_recovery():
             st.session_state["registration_validation_error"] = str(error)
             st.rerun()
         except Exception as error:
-            st.error(f"ยังยืนยันผลไม่ได้ ข้อมูลรายการเดิมยังอยู่: {error}")
+            st.error(f"ยังยืนยันผลไม่ได้ ข้อมูลรายการเดิมยังอยู่: {read_error_message(error)}")
         else:
             finish_registration_operation(operation)
             st.rerun()
@@ -3957,9 +4245,9 @@ def submit_registration_operation(operation):
         execute_registration_operation(operation)
     except (core.ValidationError, transactions.BusyError, PermissionError) as error:
         st.session_state.pop("registration_pending_operation", None)
-        st.error(f"ยังบันทึกไม่ได้: {error}")
+        st.error(f"ยังบันทึกไม่ได้: {read_error_message(error)}")
     except Exception as error:
-        st.error(f"ยังยืนยันผลการบันทึกไม่ได้ ข้อมูลเดิมยังอยู่ กรุณาตรวจสอบอีกครั้ง: {error}")
+        st.error(f"ยังยืนยันผลการบันทึกไม่ได้ ข้อมูลเดิมยังอยู่ กรุณาตรวจสอบอีกครั้ง: {read_error_message(error)}")
     else:
         finish_registration_operation(operation)
         st.rerun()
@@ -3988,10 +4276,8 @@ try:
     st.sidebar.title("🌱 Thai Stick Trading")
     st.sidebar.caption("แก้ไขข้อมูลได้" if can_write() else "โหมดอ่านอย่างเดียว")
     st.sidebar.button("รีเฟรชข้อมูล", key="portal_refresh", on_click=refresh_portal_data)
-    read_times = sync_registry()
-    if read_times:
-        st.sidebar.caption("โหลดข้อมูลล่าสุด " + max(read_times.values()).strftime("%d/%m/%Y %H:%M"))
-    st.sidebar.caption("ยอดสต็อกจะตรวจใหม่อัตโนมัติก่อนบันทึก")
+    sync_stamp = st.sidebar.empty()
+    st.sidebar.caption("ข้อมูลหน้าจอใช้ร่วมกันสูงสุด 2 นาที · ตรวจยอดล่าสุดก่อนบันทึกทุกครั้ง")
     st.sidebar.markdown("---")
     menu = st.sidebar.radio(
         "เลือกเมนูการใช้งาน",
@@ -4021,12 +4307,12 @@ try:
         picking_delivery_sheet = None
         legacy_delivery_rows = []
         try:
-            del_sheet = sh.worksheet("Delivery_schedule")
+            del_sheet = get_display_worksheet(sh, "Delivery_schedule")
             legacy_delivery_rows = get_cached_data("delivery", del_sheet, include_row_index=True)
         except gspread.exceptions.WorksheetNotFound:
             st.info("ยังไม่มีแท็บ Delivery_schedule รายการ Picking Request ที่สร้างแล้วจะแสดงด้านล่างได้")
         except Exception as error:
-            st.error(f"❌ โหลดรายการ Delivery เดิมไม่สำเร็จ: {error}")
+            st.error(f"❌ โหลดรายการ Delivery เดิมไม่สำเร็จ: {read_error_message(error)}")
         delivery_rows = [dict(row, _Delivery_Source="legacy") for row in legacy_delivery_rows]
         try:
             picking_delivery_sheet, picking_delivery_rows = load_picking_requests(sh)
@@ -4036,7 +4322,7 @@ try:
                 )
                 delivery_rows = merge_delivery_requests(legacy_delivery_rows, picking_delivery_rows, current_catalog)
         except Exception as error:
-            st.warning(f"ยังโหลด Picking Request ไม่สำเร็จ รายการ Delivery เดิมยังแสดงตามข้อมูลที่โหลดได้: {error}")
+            st.warning(f"ยังโหลด Picking Request ไม่สำเร็จ รายการ Delivery เดิมยังแสดงตามข้อมูลที่โหลดได้: {read_error_message(error)}")
         df_del = pd.DataFrame(delivery_rows) if delivery_rows else pd.DataFrame()
 
         if not df_del.empty:
@@ -4266,10 +4552,9 @@ try:
                                         success_rows.append(f"{target_sheet.title} แถว {target_row}")
                                     update_delivery_dates(sh, targets, new_value)
                                 except Exception as error:
-                                    st.error(f"❌ บันทึกกำหนดการไม่สำเร็จ กรุณาลองใหม่: {error}")
+                                    st.error(f"❌ บันทึกกำหนดการไม่สำเร็จ กรุณาลองใหม่: {read_error_message(error)}")
                                 else:
-                                    get_cached_data.clear()
-                                    get_cached_picking_rows.clear()
+                                    invalidate_display_cache(sh)
                                     schedule_label = "TBC (รอยืนยันวันจัดส่งใหม่)" if mark_tbc else new_date.strftime("%d/%m/%Y")
                                     st.session_state["delivery_reschedule_success"] = (
                                         f"✅ อัปเดตกำหนดส่งเป็น {schedule_label} สำหรับ {', '.join(success_rows)} เรียบร้อยแล้ว"
@@ -4309,7 +4594,7 @@ try:
                                 requests_service.update_delivery_details(sh, targets, permit_no="" if clear_permit else new_permit,
                                                                         quantity=permit_quantity if permit_quantity > 0 else None)
                             except Exception as error:
-                                st.error(f"ยังบันทึก Permit No. ไม่สำเร็จ: {error}")
+                                st.error(f"ยังบันทึก Permit No. ไม่สำเร็จ: {read_error_message(error)}")
                             else:
                                 refresh_portal_data()
                                 st.session_state["delivery_reschedule_success"] = f"บันทึก Permit No. และจัดจำนวนให้ {len(targets):,} รายการแล้ว"
@@ -4569,13 +4854,12 @@ try:
                             sh, request_id, st.session_state["picking_draft_created_at"], lines_to_save, shipping_date,
                         )
                 except Exception as error:
-                    st.error(f"ยังยืนยันการบันทึกไม่ได้: {error}")
+                    st.error(f"ยังยืนยันการบันทึกไม่ได้: {read_error_message(error)}")
                     st.caption("คำขอยังคงใช้หมายเลขเดิม หากการเชื่อมต่อขัดข้องให้กดบันทึกซ้ำโดยไม่แก้ข้อมูล ระบบจะตรวจคำขอเดิมก่อนเพื่อป้องกันรายการซ้ำ")
                 else:
                     st.session_state["picking_draft_saved"] = result
                     st.session_state["picking_history_request"] = request_id
-                    get_cached_data.clear()
-                    get_cached_picking_rows.clear()
+                    invalidate_display_cache(sh)
                     st.rerun()
 
         render_section_heading(
@@ -4591,7 +4875,7 @@ try:
             if not show_archive:
                 projected_history = [row for row in projected_history if row["Request Status"] not in {"Completed", "Cancelled"}]
         except Exception as error:
-            st.error(f"โหลดประวัติ Picking Request ไม่สำเร็จ: {error}")
+            st.error(f"โหลดประวัติ Picking Request ไม่สำเร็จ: {read_error_message(error)}")
         else:
             if projected_history:
                 request_ids = list(dict.fromkeys(str(row.get("Request ID", "")) for row in projected_history if row.get("Request ID")))
@@ -4632,9 +4916,9 @@ try:
                             "expected": current_rows, "token": uuid4().hex[:12],
                             "editor_input": pd.DataFrame(editor_rows, columns=edit_columns),
                         }
-                        get_cached_picking_rows.clear()
+                        invalidate_display_cache(sh)
                     except Exception as error:
-                        st.error(f"เปิดข้อมูล Request ไม่สำเร็จ: {error}")
+                        st.error(f"เปิดข้อมูล Request ไม่สำเร็จ: {read_error_message(error)}")
                     else:
                         st.rerun()
             else:
@@ -5035,7 +5319,11 @@ try:
     elif menu == "🚚 Shipped Out Module":
         render_shipping_page(sh)
 
+    loaded_at = get_display_loaded_at(sh)
+    if loaded_at is not None:
+        sync_stamp.caption("โหลดข้อมูลล่าสุด " + loaded_at.strftime("%d/%m/%Y %H:%M:%S") + " (เวลาไทย)")
+
 except Exception as error:
     logging.getLogger(__name__).exception("Portal page failed")
-    st.error(f"ไม่สามารถแสดงข้อมูลหน้านี้ได้: {error}")
+    st.error(f"ไม่สามารถแสดงข้อมูลหน้านี้ได้: {read_error_message(error)}")
     st.info("กดรีเฟรชข้อมูลหรือลองใหม่ ระบบจะไม่แสดงยอดว่างแทนข้อมูลที่โหลดไม่สำเร็จ")
